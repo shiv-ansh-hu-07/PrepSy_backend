@@ -1,0 +1,79 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String?
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roomsOwned  Room[]       @relation("UserOwnedRooms")
+  roomMembers RoomMember[]
+}
+
+model Room {
+  id     String @id @default(cuid())
+  roomId String @unique
+  name   String
+  description String?     
+  tags        String[]
+
+  ownerId   String?
+  owner     User?        @relation("UserOwnedRooms", fields: [ownerId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  visibility  RoomVisibility @default(PRIVATE)
+
+  members  RoomMember[]
+  messages Message[]
+
+  pomodoro Pomodoro?
+}
+
+enum RoomVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+model RoomMember {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  joinedAt DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [roomId])
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  roomId     String
+  senderId   String?
+  senderName String?
+  text       String
+  createdAt  DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
+
+  @@index([roomId])
+}
+
+model Pomodoro {
+  id        String   @id @default(cuid())
+  roomId    String   @unique
+  running   Boolean  @default(false)
+  mode      String   @default("work")
+  remaining Int      @default(1500)
+  updatedAt DateTime @updatedAt
+
+  room Room @relation(fields: [roomId], references: [roomId])
+}

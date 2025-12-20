@@ -1,0 +1,10 @@
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  udp_port: 0
+  ice_port_range_start: 0
+  ice_port_range_end: 0
+
+keys:
+  devkey: devsecret1234567890devsecret123456
