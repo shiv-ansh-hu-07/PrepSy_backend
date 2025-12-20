@@ -4,11 +4,11 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ---- FIXED CORS ----
+  // ---- FIXED CORS (DEV + PROD SAFE) ----
   app.enableCors({
     origin: [
-      "http://localhost:5173",   // Vite frontend
-      "http://localhost:3000",   // optional (if you proxy)
+      "http://localhost:5173",                // local dev
+      "https://prep-sy-frontend.vercel.app/",     // production frontend
     ],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -16,8 +16,10 @@ async function bootstrap() {
     exposedHeaders: ["Authorization"],
   });
 
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
 
-  await app.listen(process.env.PORT || 5000);
-  console.log(`🚀 Backend running at http://localhost:${process.env.PORT || 5000}`);
+  console.log(`🚀 Backend running on port ${port}`);
 }
+
 bootstrap();
