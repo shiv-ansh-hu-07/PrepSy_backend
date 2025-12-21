@@ -53,6 +53,7 @@ export class LivekitController {
 
     return res.json({
       token: jwt,
+      url: process.env.LIVEKIT_WS_URL,
     });
   }
 }
