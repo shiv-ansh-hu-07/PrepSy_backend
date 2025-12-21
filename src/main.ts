@@ -4,21 +4,22 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ---- FIXED CORS (DEV + PROD SAFE) ----
   app.enableCors({
     origin: [
-      "http://localhost:5173",                // local dev
-      "https://prep-sy-frontend.vercel.app/",     // production frontend
+      'http://localhost:5173',
+      'https://prep-sy-frontend.vercel.app',
     ],
     credentials: true,
-    allowedHeaders: ["Content-Type", "Authorization"],
-    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
-    exposedHeaders: ["Authorization"],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
   });
 
-  const port = process.env.PORT || 3000;
-  await app.listen(port);
+  const port = Number(process.env.PORT);
+  if (!port) {
+    throw new Error('PORT not defined');
+  }
 
+  await app.listen(port, '0.0.0.0');
   console.log(`🚀 Backend running on port ${port}`);
 }
 
