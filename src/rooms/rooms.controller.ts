@@ -71,7 +71,4 @@ export class RoomsController {
   getRoomMessages(@Param('roomId') roomId: string) {
     return this.roomsService.getRoomMessages(roomId);
   }
-
-
-
 }
