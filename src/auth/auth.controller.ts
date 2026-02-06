@@ -19,7 +19,7 @@ export class AuthController {
     this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
 
-    // =========================
+  // =========================
   // REGISTER (EMAIL/PASSWORD)
   // =========================
 
@@ -44,7 +44,7 @@ export class AuthController {
     return this.auth.login(email, password);
   }
 
-    // =========================
+  // =========================
   // GOOGLE OAUTH (ID TOKEN)
   // =========================
   @Post('oauth/google')
@@ -73,9 +73,10 @@ export class AuthController {
   // ========================
   // CURRENT USER
   // =========================
-  @Get('me')
+  @Get("me")
   @UseGuards(JwtAuthGuard)
   me(@Req() req: any) {
-    return this.auth.me(req.user.id);
+    return this.auth.me(req.user.sub);
   }
+
 }

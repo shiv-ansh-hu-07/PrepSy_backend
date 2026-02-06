@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
+import { User } from '@prisma/client';
 
 @Injectable()
 export class AuthService {
@@ -17,22 +18,13 @@ export class AuthService {
   // =========================
   // HELPER: SIGN JWT
   // =========================
-  private signJwt(user: { id: string; email: string; name?: string }) {
-    const token = this.jwt.sign({
-      sub: user.id,
-      email: user.email,
-      name: user.name,
-    });
+  private signJwt(user: User) {
+  return this.jwt.sign({
+    sub: user.id,
+    email: user.email,
+  });
+}
 
-    return {
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      },
-    };
-  }
 
   // =========================
   // REGISTER (EMAIL/PASSWORD)
@@ -94,15 +86,26 @@ export class AuthService {
   // CURRENT USER
   // =========================
   async me(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new UnauthorizedException('User not found');
-
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name
-    };
+  if (!userId) {
+    throw new UnauthorizedException("Invalid token");
   }
+  
+
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user) {
+    throw new UnauthorizedException("User not found");
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+  };
+}
+
 
   // =========================
   // GOOGLE OAUTH LOGIN
