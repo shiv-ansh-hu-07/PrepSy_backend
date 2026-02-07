@@ -16,15 +16,14 @@ export class AuthService {
   ) {}
 
   // =========================
-  // HELPER: SIGN JWT
+  // HELPER: SIGN JWT (STANDARD)
   // =========================
   private signJwt(user: User) {
-  return this.jwt.sign({
-    sub: user.id,
-    email: user.email,
-  });
-}
-
+    return this.jwt.sign({
+      sub: user.id,
+      email: user.email,
+    });
+  }
 
   // =========================
   // REGISTER (EMAIL/PASSWORD)
@@ -39,18 +38,18 @@ export class AuthService {
       data: {
         email,
         password: hashed,
-        name: name ?? "",
-        
+        name: name ?? '',
+        provider: 'local',
       },
     });
 
-    return { 
+    return {
       message: 'User registered successfully',
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
-      }
+        name: user.name,
+      },
     };
   }
 
@@ -59,26 +58,22 @@ export class AuthService {
   // =========================
   async login(email: string, password: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) throw new UnauthorizedException('Invalid email or password');
+    if (!user || !user.password) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) throw new UnauthorizedException('Invalid email or password');
 
-    const token = this.jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      }
-    );
+    const token = this.signJwt(user);
 
-    return { 
+    return {
       token,
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
-      }
+        name: user.name,
+      },
     };
   }
 
@@ -86,26 +81,24 @@ export class AuthService {
   // CURRENT USER
   // =========================
   async me(userId: string) {
-  if (!userId) {
-    throw new UnauthorizedException("Invalid token");
+    if (!userId) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+    };
   }
-  
-
-  const user = await this.prisma.user.findUnique({
-    where: { id: userId },
-  });
-
-  if (!user) {
-    throw new UnauthorizedException("User not found");
-  }
-
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-  };
-}
-
 
   // =========================
   // GOOGLE OAUTH LOGIN
@@ -130,10 +123,20 @@ export class AuthService {
           name: profile.name ?? '',
           provider,
           providerId: profile.providerId,
+          password: null, // important for Google users
         },
       });
     }
 
-    return this.signJwt(user);
+    const token = this.signJwt(user);
+
+    return {
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+      },
+    };
   }
 }
