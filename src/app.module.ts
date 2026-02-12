@@ -6,9 +6,10 @@ import { PrismaModule } from './prisma/prisma.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { StatsModule } from './stats/stats.module';
 import { LivekitController } from "./livekit/livekit.controller";
+import { MessagesModule } from './messages/messages.module';
 
 @Module({
-  imports: [AuthModule, PrismaModule, RoomsModule, StatsModule,],
+  imports: [AuthModule, PrismaModule, RoomsModule, StatsModule,MessagesModule,],
   controllers: [AppController, LivekitController],
   providers: [AppService],
 })
