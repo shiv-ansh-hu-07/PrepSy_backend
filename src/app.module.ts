@@ -7,9 +7,10 @@ import { RoomsModule } from './rooms/rooms.module';
 import { StatsModule } from './stats/stats.module';
 import { LivekitController } from "./livekit/livekit.controller";
 import { MessagesModule } from './messages/messages.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
-  imports: [AuthModule, PrismaModule, RoomsModule, StatsModule,MessagesModule,],
+  imports: [AuthModule, PrismaModule, RoomsModule, StatsModule,MessagesModule,ScheduleModule.forRoot(), ],
   controllers: [AppController, LivekitController],
   providers: [AppService],
 })

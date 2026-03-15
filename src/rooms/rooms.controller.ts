@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Req, UseGuards, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Req,
+  UseGuards,
+  Query,
+} from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { Delete, Param } from '@nestjs/common';
@@ -16,7 +24,14 @@ export class RoomsController {
     @Body('description') description: string,
     @Body('tags') tags: string[],
     @Body('visibility') visibility: 'PUBLIC' | 'PRIVATE',
-    @Req() req: any
+    @Req() req: any,
+    @Body('startTime') startTime?: string,
+    @Body('durationMinutes') durationMinutes?: number,
+    @Body('isRecurring') isRecurring?: boolean,
+    @Body('recurrenceType') recurrenceType?: string,
+    @Body('recurrenceEndDate') recurrenceEndDate?: string,
+    @Body('scheduleTime') scheduleTime?: string,
+    @Body('timezone') timezone?: string,
   ) {
     return this.roomsService.createRoom(
       name,
@@ -24,10 +39,16 @@ export class RoomsController {
       description,
       tags,
       visibility,
-      req.user.id
+      req.user.id,
+      startTime,
+      durationMinutes,
+      isRecurring,
+      recurrenceType,
+      recurrenceEndDate,
+      scheduleTime,
+      timezone,
     );
   }
-
 
   @Get()
   getRooms() {

@@ -1,40 +1,249 @@
-// src/rooms/rooms.service.ts
 import {
-  Injectable,
-  NotFoundException,
+  BadRequestException,
   ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { v4 as uuid } from 'uuid';
 import { RoomWithRelations } from './room.types';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class RoomsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(RoomsService.name);
 
-  // -------------------------------
-  // CREATE ROOM (PUBLIC / PRIVATE)
-  // -------------------------------
+  constructor(
+    private prisma: PrismaService,
+    private emailService: EmailService,
+  ) {}
+
+  private parseRecurrenceMeta(recurrenceType?: string | null) {
+    if (!recurrenceType) {
+      return { frequency: null, timeZone: null };
+    }
+
+    const [frequency, timeZone] = recurrenceType.split('|');
+    return {
+      frequency: frequency || null,
+      timeZone: timeZone || null,
+    };
+  }
+
+  private getDatePartsInTimeZone(date: Date, timeZone: string) {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    });
+
+    const parts = formatter.formatToParts(date);
+    const read = (type: string) => {
+      const value = parts.find((part) => part.type === type)?.value;
+      return value ? Number(value) : 0;
+    };
+
+    return {
+      year: read('year'),
+      month: read('month'),
+      day: read('day'),
+      hour: read('hour'),
+      minute: read('minute'),
+      second: read('second'),
+    };
+  }
+
+  private getTimeZoneOffsetMs(date: Date, timeZone: string) {
+    const parts = this.getDatePartsInTimeZone(date, timeZone);
+    const asUtc = Date.UTC(
+      parts.year,
+      parts.month - 1,
+      parts.day,
+      parts.hour,
+      parts.minute,
+      parts.second,
+    );
+
+    return asUtc - date.getTime();
+  }
+
+  private zonedTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+    timeZone: string,
+  ) {
+    const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0);
+    const offset = this.getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
+    return new Date(utcGuess - offset);
+  }
+
+  private validateTimeZone(timeZone: string) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildScheduledStartTime(scheduleTime: string, timeZone: string) {
+    if (!/^\d{2}:\d{2}$/.test(scheduleTime)) {
+      throw new BadRequestException('Schedule time must be in HH:mm format');
+    }
+
+    if (!this.validateTimeZone(timeZone)) {
+      throw new BadRequestException('Invalid timezone');
+    }
+
+    const [hourText, minuteText] = scheduleTime.split(':');
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+
+    if (
+      Number.isNaN(hour) ||
+      Number.isNaN(minute) ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      throw new BadRequestException('Invalid schedule time');
+    }
+
+    const now = new Date();
+    const zonedNow = this.getDatePartsInTimeZone(now, timeZone);
+
+    let nextStart = this.zonedTimeToUtc(
+      zonedNow.year,
+      zonedNow.month,
+      zonedNow.day,
+      hour,
+      minute,
+      timeZone,
+    );
+
+    if (nextStart.getTime() <= now.getTime()) {
+      nextStart = this.zonedTimeToUtc(
+        zonedNow.year,
+        zonedNow.month,
+        zonedNow.day + 1,
+        hour,
+        minute,
+        timeZone,
+      );
+    }
+
+    return nextStart;
+  }
+
   async createRoom(
     name: string,
     roomId: string,
     description: string,
     tags: string[],
     visibility: 'PUBLIC' | 'PRIVATE',
-    userId: string
+    userId: string,
+    startTime?: string,
+    durationMinutes?: number,
+    isRecurring?: boolean,
+    recurrenceType?: string,
+    recurrenceEndDate?: string,
+    scheduleTime?: string,
+    timezone?: string,
   ) {
+    if (!name?.trim()) {
+      throw new BadRequestException('Room name is required');
+    }
+
+    const cleanTags = Array.from(
+      new Set(
+        (tags || [])
+          .map((tag) => tag?.trim().toLowerCase())
+          .filter((tag): tag is string => Boolean(tag)),
+      ),
+    );
+
+    const safeDuration =
+      typeof durationMinutes === 'number' && durationMinutes > 0
+        ? Math.round(durationMinutes)
+        : null;
+
+    const scheduleRequested =
+      Boolean(startTime) || (Boolean(scheduleTime) && Boolean(timezone));
+
+    const resolvedStartTime = scheduleRequested
+      ? startTime
+        ? new Date(startTime)
+        : this.buildScheduledStartTime(scheduleTime!, timezone!)
+      : null;
+
+    if (resolvedStartTime && Number.isNaN(resolvedStartTime.getTime())) {
+      throw new BadRequestException('Invalid room start time');
+    }
+
+    const recurrenceMeta =
+      scheduleRequested && timezone
+        ? `${isRecurring ? 'DAILY' : 'ONE_TIME'}|${timezone}`
+        : recurrenceType || null;
+
     const finalRoomId = roomId || uuid();
 
-    const room = await this.prisma.room.create({
-      data: {
-        name,
-        roomId: finalRoomId,
-        description,
-        tags: tags || [],
-        visibility,
-        ownerId: userId,
-      },
+    const room = await this.prisma.$transaction(async (tx) => {
+      const createdRoom = await tx.room.create({
+        data: {
+          name: name.trim(),
+          roomId: finalRoomId,
+          description: description?.trim() || null,
+          tags: cleanTags,
+          visibility,
+          ownerId: userId,
+          startTime: resolvedStartTime,
+          durationMinutes: safeDuration,
+          isRecurring: Boolean(scheduleRequested && isRecurring),
+          recurrenceType: recurrenceMeta,
+          recurrenceEndDate: recurrenceEndDate
+            ? new Date(recurrenceEndDate)
+            : null,
+          remindersent: false,
+        },
+      });
+
+      await tx.roomMember.create({
+        data: {
+          roomId: createdRoom.roomId,
+          userId,
+        },
+      });
+
+      return createdRoom;
     });
+
+    if (resolvedStartTime) {
+      const owner = await this.prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (owner?.email) {
+        const meta = this.parseRecurrenceMeta(room.recurrenceType);
+        await this.emailService.sendScheduledRoomConfirmationEmail(
+          owner.email,
+          room.name,
+          resolvedStartTime,
+          room.durationMinutes,
+          meta.timeZone || timezone,
+        );
+      }
+    }
 
     return {
       success: true,
@@ -43,17 +252,11 @@ export class RoomsService {
     };
   }
 
-  // -------------------------------
-  // GET ALL ROOMS (ADMIN / DEBUG)
-  // -------------------------------
   async getRooms() {
     const rooms = await this.prisma.room.findMany();
     return { rooms };
   }
 
-  // -------------------------------
-  // GET PUBLIC ROOMS (DASHBOARD)
-  // -------------------------------
   async getPublicRooms() {
     const rooms = await this.prisma.room.findMany({
       where: {
@@ -67,6 +270,9 @@ export class RoomsService {
         tags: true,
         ownerId: true,
         createdAt: true,
+        startTime: true,
+        durationMinutes: true,
+        isRecurring: true,
       },
       orderBy: {
         createdAt: 'desc',
@@ -76,9 +282,6 @@ export class RoomsService {
     return { rooms };
   }
 
-  // -------------------------------
-  // SEARCH ROOMS BY TAGS
-  // -------------------------------
   async searchRoomsByTags(tags: string[]) {
     if (!tags || tags.length === 0) {
       return { rooms: [] };
@@ -98,15 +301,15 @@ export class RoomsService {
         tags: true,
         ownerId: true,
         createdAt: true,
+        startTime: true,
+        durationMinutes: true,
+        isRecurring: true,
       },
     });
 
     return { rooms };
   }
 
-  // -------------------------------
-  // GET ROOMS CREATED / JOINED BY USER
-  // -------------------------------
   async getMyRooms(userId: string) {
     const createdRooms = await this.prisma.room.findMany({
       where: { ownerId: userId },
@@ -118,6 +321,9 @@ export class RoomsService {
         tags: true,
         ownerId: true,
         createdAt: true,
+        startTime: true,
+        durationMinutes: true,
+        isRecurring: true,
       },
     });
 
@@ -133,6 +339,9 @@ export class RoomsService {
             tags: true,
             ownerId: true,
             createdAt: true,
+            startTime: true,
+            durationMinutes: true,
+            isRecurring: true,
           },
         },
       },
@@ -146,9 +355,6 @@ export class RoomsService {
     };
   }
 
-  // -------------------------------
-  // JOIN ROOM
-  // -------------------------------
   async joinRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
@@ -168,12 +374,19 @@ export class RoomsService {
       });
     }
 
+    const alreadyJoined = await this.prisma.roomAttendance.findFirst({
+      where: { roomId, userId },
+    });
+
+    if (!alreadyJoined) {
+      await this.prisma.roomAttendance.create({
+        data: { roomId, userId },
+      });
+    }
+
     return { success: true };
   }
 
-  // -------------------------------
-  // DELETE ROOM (OWNER ONLY)
-  // -------------------------------
   async deleteRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
@@ -184,9 +397,7 @@ export class RoomsService {
     }
 
     if (room.ownerId !== userId) {
-      throw new ForbiddenException(
-        'You are not allowed to delete this room'
-      );
+      throw new ForbiddenException('You are not allowed to delete this room');
     }
 
     await this.prisma.roomMember.deleteMany({
@@ -208,9 +419,6 @@ export class RoomsService {
     return { success: true };
   }
 
-  // -------------------------------
-  // GET ROOM DETAILS
-  // -------------------------------
   async getRoomDetails(roomId: string): Promise<RoomWithRelations> {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
@@ -228,49 +436,36 @@ export class RoomsService {
     return room;
   }
 
-  // -------------------------------
-  // SAVE CHAT MESSAGE
-  // -------------------------------
-  // -------------------------------
-// SAVE CHAT MESSAGE (PERSISTENT)
-// -------------------------------
-async saveMessage(
-  roomId: string,
-  senderId: string,
-  text: string,
-  senderName?: string
-) {
-  return this.prisma.message.create({
-    data: {
-      roomId,
-      senderId,
-      senderName,
-      text,
-    },
-  });
-}
+  async saveMessage(
+    roomId: string,
+    senderId: string,
+    text: string,
+    senderName?: string,
+  ) {
+    return this.prisma.message.create({
+      data: {
+        roomId,
+        senderId,
+        senderName,
+        text,
+      },
+    });
+  }
 
+  async getRoomMessages(roomId: string) {
+    return this.prisma.message.findMany({
+      where: { roomId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
 
-
-async getRoomMessages(roomId: string) {
-  return this.prisma.message.findMany({
-    where: { roomId },
-    orderBy: { createdAt: 'asc' },
-  });
-}
-
-
-
-  // -------------------------------
-  // SAVE / UPDATE POMODORO
-  // -------------------------------
   async savePomodoro(
     roomId: string,
     pomodoro: {
       running: boolean;
       mode: string;
       remaining: number;
-    }
+    },
   ) {
     return this.prisma.pomodoro.upsert({
       where: { roomId },
@@ -286,5 +481,141 @@ async getRoomMessages(roomId: string) {
         remaining: pomodoro.remaining,
       },
     });
+  }
+
+  async getRoomsStartingIn(minutes: number) {
+    const now = new Date();
+    const future = new Date(now.getTime() + minutes * 60000);
+
+    return this.prisma.room.findMany({
+      where: {
+        startTime: {
+          gte: now,
+          lte: future,
+        },
+      },
+      include: {
+        members: true,
+      },
+    });
+  }
+
+  async getAbsentMembers(roomId: string) {
+    const members = await this.prisma.roomMember.findMany({
+      where: { roomId },
+    });
+
+    const attendance = await this.prisma.roomAttendance.findMany({
+      where: { roomId },
+    });
+
+    const joinedUserIds = attendance.map((entry) => entry.userId);
+
+    return members.filter((member) => !joinedUserIds.includes(member.userId));
+  }
+
+  async notifyUserRoomJoined(
+    targetUserId: string,
+    roomId: string,
+    joinedUserId: string,
+  ) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+    });
+
+    if (!room) return;
+
+    const attendance = await this.prisma.roomAttendance.findMany({
+      where: { roomId },
+    });
+
+    const joinedUserIds = [...new Set(attendance.map((entry) => entry.userId))];
+    const joinedCount = joinedUserIds.length;
+
+    if (joinedCount === 0 || targetUserId === joinedUserId) {
+      return;
+    }
+
+    const targetUser = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+    });
+
+    if (!targetUser?.email) {
+      return;
+    }
+
+    await this.emailService.sendJoinNudgeEmail(
+      targetUser.email,
+      room.name,
+      joinedCount,
+    );
+  }
+
+  async checkAndSendReminders() {
+    const now = new Date();
+    const in15Minutes = new Date(now.getTime() + 15 * 60000);
+
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        remindersent: false,
+        startTime: {
+          gte: now,
+          lte: in15Minutes,
+        },
+      },
+    });
+
+    for (const room of rooms) {
+      if (!room.startTime) continue;
+
+      const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
+      const members = await this.prisma.roomMember.findMany({
+        where: { roomId: room.roomId },
+      });
+
+      for (const member of members) {
+        const user = await this.prisma.user.findUnique({
+          where: { id: member.userId },
+        });
+
+        if (!user?.email) continue;
+
+        await this.emailService.sendReminderEmail(
+          user.email,
+          room.name,
+          room.startTime,
+          recurrenceMeta.timeZone || undefined,
+        );
+      }
+
+      if (room.isRecurring && recurrenceMeta.frequency === 'DAILY') {
+        await this.prisma.room.update({
+          where: { roomId: room.roomId },
+          data: {
+            startTime: new Date(room.startTime.getTime() + 24 * 60 * 60 * 1000),
+            remindersent: false,
+          },
+        });
+        continue;
+      }
+
+      await this.prisma.room.update({
+        where: { roomId: room.roomId },
+        data: { remindersent: true },
+      });
+    }
+
+    return { success: true, roomsChecked: rooms.length };
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async runReminderScheduler() {
+    try {
+      await this.checkAndSendReminders();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown reminder error';
+      this.logger.error(`Reminder scheduler failed: ${message}`);
+    }
   }
 }

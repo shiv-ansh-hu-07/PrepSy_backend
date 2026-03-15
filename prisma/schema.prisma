@@ -20,9 +20,11 @@ model User {
 
   roomsOwned  Room[]       @relation("UserOwnedRooms")
   roomMembers RoomMember[]
+  attendance  RoomAttendance[]
 
   @@unique([provider, providerId])
 }
+
 
 model Room {
   id     String @id @default(cuid())
@@ -38,10 +40,18 @@ model Room {
 
   visibility  RoomVisibility @default(PRIVATE)
 
+  startTime          DateTime?
+  durationMinutes    Int?
+  isRecurring        Boolean   @default(false)
+  recurrenceType     String?   
+  recurrenceEndDate  DateTime?
+
+  remindersent Boolean @default(false)
+
   members  RoomMember[]
   messages Message[]
-
   pomodoro Pomodoro?
+  attendance RoomAttendance[]
 }
 
 enum RoomVisibility {
@@ -81,4 +91,17 @@ model Pomodoro {
   updatedAt DateTime @updatedAt
 
   room Room @relation(fields: [roomId], references: [roomId])
+}
+
+model RoomAttendance {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  room Room @relation(fields: [roomId], references: [roomId])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([roomId])
 }
