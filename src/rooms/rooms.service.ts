@@ -14,6 +14,9 @@ import { EmailService } from '../email/email.service';
 @Injectable()
 export class RoomsService {
   private readonly logger = new Logger(RoomsService.name);
+  private readonly timeZoneAliases: Record<string, string> = {
+    'Asia/Calcutta': 'Asia/Kolkata',
+  };
 
   constructor(
     private prisma: PrismaService,
@@ -89,19 +92,28 @@ export class RoomsService {
 
   private validateTimeZone(timeZone: string) {
     try {
-      new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date());
+      const normalizedTimeZone = this.normalizeTimeZone(timeZone);
+      new Intl.DateTimeFormat('en-US', { timeZone: normalizedTimeZone }).format(
+        new Date(),
+      );
       return true;
     } catch {
       return false;
     }
   }
 
+  private normalizeTimeZone(timeZone: string) {
+    return this.timeZoneAliases[timeZone] || timeZone;
+  }
+
   private buildScheduledStartTime(scheduleTime: string, timeZone: string) {
+    const normalizedTimeZone = this.normalizeTimeZone(timeZone);
+
     if (!/^\d{2}:\d{2}$/.test(scheduleTime)) {
       throw new BadRequestException('Schedule time must be in HH:mm format');
     }
 
-    if (!this.validateTimeZone(timeZone)) {
+    if (!this.validateTimeZone(normalizedTimeZone)) {
       throw new BadRequestException('Invalid timezone');
     }
 
@@ -121,7 +133,7 @@ export class RoomsService {
     }
 
     const now = new Date();
-    const zonedNow = this.getDatePartsInTimeZone(now, timeZone);
+    const zonedNow = this.getDatePartsInTimeZone(now, normalizedTimeZone);
 
     let nextStart = this.zonedTimeToUtc(
       zonedNow.year,
@@ -129,7 +141,7 @@ export class RoomsService {
       zonedNow.day,
       hour,
       minute,
-      timeZone,
+      normalizedTimeZone,
     );
 
     if (nextStart.getTime() <= now.getTime()) {
@@ -139,7 +151,7 @@ export class RoomsService {
         zonedNow.day + 1,
         hour,
         minute,
-        timeZone,
+        normalizedTimeZone,
       );
     }
 
@@ -165,6 +177,10 @@ export class RoomsService {
       throw new BadRequestException('Room name is required');
     }
 
+    const normalizedTimeZone = timezone
+      ? this.normalizeTimeZone(timezone)
+      : undefined;
+
     const cleanTags = Array.from(
       new Set(
         (tags || [])
@@ -184,7 +200,7 @@ export class RoomsService {
     const resolvedStartTime = scheduleRequested
       ? startTime
         ? new Date(startTime)
-        : this.buildScheduledStartTime(scheduleTime!, timezone!)
+        : this.buildScheduledStartTime(scheduleTime!, normalizedTimeZone!)
       : null;
 
     if (resolvedStartTime && Number.isNaN(resolvedStartTime.getTime())) {
@@ -192,8 +208,8 @@ export class RoomsService {
     }
 
     const recurrenceMeta =
-      scheduleRequested && timezone
-        ? `${isRecurring ? 'DAILY' : 'ONE_TIME'}|${timezone}`
+      scheduleRequested && normalizedTimeZone
+        ? `${isRecurring ? 'DAILY' : 'ONE_TIME'}|${normalizedTimeZone}`
         : recurrenceType || null;
 
     const finalRoomId = roomId || uuid();
@@ -240,7 +256,7 @@ export class RoomsService {
           room.name,
           resolvedStartTime,
           room.durationMinutes,
-          meta.timeZone || timezone,
+          meta.timeZone || normalizedTimeZone,
         );
       }
     }
