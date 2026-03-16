@@ -17,6 +17,19 @@ export class RoomsService {
   private readonly timeZoneAliases: Record<string, string> = {
     'Asia/Calcutta': 'Asia/Kolkata',
   };
+  private readonly roomListSelect = {
+    id: true,
+    roomId: true,
+    name: true,
+    description: true,
+    tags: true,
+    ownerId: true,
+    createdAt: true,
+    startTime: true,
+    durationMinutes: true,
+    isRecurring: true,
+    recurrenceType: true,
+  } as const;
 
   constructor(
     private prisma: PrismaService,
@@ -158,6 +171,43 @@ export class RoomsService {
     return nextStart;
   }
 
+  private isRoomActive(room: {
+    startTime: Date | null;
+    durationMinutes: number | null;
+    isRecurring: boolean;
+    recurrenceType: string | null;
+  }) {
+    if (!room.startTime || !room.durationMinutes) {
+      return false;
+    }
+
+    const now = new Date();
+    const durationMs = room.durationMinutes * 60 * 1000;
+
+    if (!room.isRecurring) {
+      const endTime = new Date(room.startTime.getTime() + durationMs);
+      return now >= room.startTime && now <= endTime;
+    }
+
+    const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
+    const timeZone = this.normalizeTimeZone(
+      recurrenceMeta.timeZone || 'Asia/Kolkata',
+    );
+    const scheduledTime = this.getDatePartsInTimeZone(room.startTime, timeZone);
+    const today = this.getDatePartsInTimeZone(now, timeZone);
+    const todaysStart = this.zonedTimeToUtc(
+      today.year,
+      today.month,
+      today.day,
+      scheduledTime.hour,
+      scheduledTime.minute,
+      timeZone,
+    );
+    const todaysEnd = new Date(todaysStart.getTime() + durationMs);
+
+    return now >= todaysStart && now <= todaysEnd;
+  }
+
   async createRoom(
     name: string,
     roomId: string,
@@ -277,25 +327,19 @@ export class RoomsService {
     const rooms = await this.prisma.room.findMany({
       where: {
         visibility: 'PUBLIC',
+        startTime: {
+          not: null,
+        },
       },
-      select: {
-        id: true,
-        roomId: true,
-        name: true,
-        description: true,
-        tags: true,
-        ownerId: true,
-        createdAt: true,
-        startTime: true,
-        durationMinutes: true,
-        isRecurring: true,
-      },
+      select: this.roomListSelect,
       orderBy: {
         createdAt: 'desc',
       },
     });
 
-    return { rooms };
+    return {
+      rooms: rooms.filter((room) => this.isRoomActive(room)),
+    };
   }
 
   async searchRoomsByTags(tags: string[]) {
@@ -309,18 +353,7 @@ export class RoomsService {
           hasSome: tags,
         },
       },
-      select: {
-        id: true,
-        roomId: true,
-        name: true,
-        description: true,
-        tags: true,
-        ownerId: true,
-        createdAt: true,
-        startTime: true,
-        durationMinutes: true,
-        isRecurring: true,
-      },
+      select: this.roomListSelect,
     });
 
     return { rooms };
@@ -329,36 +362,14 @@ export class RoomsService {
   async getMyRooms(userId: string) {
     const createdRooms = await this.prisma.room.findMany({
       where: { ownerId: userId },
-      select: {
-        id: true,
-        roomId: true,
-        name: true,
-        description: true,
-        tags: true,
-        ownerId: true,
-        createdAt: true,
-        startTime: true,
-        durationMinutes: true,
-        isRecurring: true,
-      },
+      select: this.roomListSelect,
     });
 
     const joinedEntries = await this.prisma.roomMember.findMany({
       where: { userId },
       include: {
         room: {
-          select: {
-            id: true,
-            roomId: true,
-            name: true,
-            description: true,
-            tags: true,
-            ownerId: true,
-            createdAt: true,
-            startTime: true,
-            durationMinutes: true,
-            isRecurring: true,
-          },
+          select: this.roomListSelect,
         },
       },
     });
