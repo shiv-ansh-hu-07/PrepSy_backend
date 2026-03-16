@@ -6,6 +6,7 @@ import {
   Req,
   UseGuards,
   Query,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
@@ -16,6 +17,14 @@ import { Delete, Param } from '@nestjs/common';
 @UseGuards(JwtAuthGuard)
 export class RoomsController {
   constructor(private roomsService: RoomsService) { }
+
+  private getUserId(req: any) {
+    const userId = req?.user?.id || req?.user?.sub;
+    if (!userId) {
+      throw new UnauthorizedException('Invalid user token');
+    }
+    return userId;
+  }
 
   @Post('create')
   createRoom(
@@ -39,7 +48,7 @@ export class RoomsController {
       description,
       tags,
       visibility,
-      req.user.id,
+      this.getUserId(req),
       startTime,
       durationMinutes,
       isRecurring,
@@ -63,12 +72,12 @@ export class RoomsController {
 
   @Get('my')
   getMyRooms(@Req() req: any) {
-    return this.roomsService.getMyRooms(req.user.id);
+    return this.roomsService.getMyRooms(this.getUserId(req));
   }
 
   @Post('join')
   joinRoom(@Body('roomId') roomId: string, @Req() req: any) {
-    return this.roomsService.joinRoom(roomId, req.user.id);
+    return this.roomsService.joinRoom(roomId, this.getUserId(req));
   }
 
   @Get('search')
@@ -85,7 +94,7 @@ export class RoomsController {
     @Param('roomId') roomId: string,
     @Req() req: any
   ) {
-    return this.roomsService.deleteRoom(roomId, req.user.id);
+    return this.roomsService.deleteRoom(roomId, this.getUserId(req));
   }
 
   @Get(':roomId/messages')
