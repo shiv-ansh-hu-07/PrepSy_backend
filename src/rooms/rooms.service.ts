@@ -48,6 +48,73 @@ export class RoomsService {
     };
   }
 
+  private getRecurringWindow(
+    room: {
+      startTime: Date | null;
+      durationMinutes: number | null;
+      recurrenceType: string | null;
+    },
+    baseDate: Date,
+  ) {
+    if (!room.startTime || !room.durationMinutes) {
+      return null;
+    }
+
+    const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
+    const timeZone = this.normalizeTimeZone(
+      recurrenceMeta.timeZone || 'Asia/Kolkata',
+    );
+    const scheduledTime = this.getDatePartsInTimeZone(room.startTime, timeZone);
+    const targetDate = this.getDatePartsInTimeZone(baseDate, timeZone);
+    const start = this.zonedTimeToUtc(
+      targetDate.year,
+      targetDate.month,
+      targetDate.day,
+      scheduledTime.hour,
+      scheduledTime.minute,
+      timeZone,
+    );
+
+    return {
+      start,
+      end: new Date(start.getTime() + room.durationMinutes * 60 * 1000),
+      timeZone,
+    };
+  }
+
+  private shouldStopRecurringRoom(room: {
+    recurrenceEndDate: Date | null;
+    recurrenceType: string | null;
+    startTime: Date | null;
+  }) {
+    if (!room.recurrenceEndDate || !room.startTime) {
+      return false;
+    }
+
+    const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
+    const timeZone = this.normalizeTimeZone(
+      recurrenceMeta.timeZone || 'Asia/Kolkata',
+    );
+    const endDateParts = this.getDatePartsInTimeZone(
+      room.recurrenceEndDate,
+      timeZone,
+    );
+    const startDateParts = this.getDatePartsInTimeZone(room.startTime, timeZone);
+
+    const endKey = Date.UTC(
+      endDateParts.year,
+      endDateParts.month - 1,
+      endDateParts.day,
+    );
+    const startKey = Date.UTC(
+      startDateParts.year,
+      startDateParts.month - 1,
+      startDateParts.day,
+    );
+
+    return startKey >= endKey;
+  }
+
   private getDatePartsInTimeZone(date: Date, timeZone: string) {
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone,
@@ -190,22 +257,13 @@ export class RoomsService {
     }
 
     const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
-    const timeZone = this.normalizeTimeZone(
-      recurrenceMeta.timeZone || 'Asia/Kolkata',
-    );
-    const scheduledTime = this.getDatePartsInTimeZone(room.startTime, timeZone);
-    const today = this.getDatePartsInTimeZone(now, timeZone);
-    const todaysStart = this.zonedTimeToUtc(
-      today.year,
-      today.month,
-      today.day,
-      scheduledTime.hour,
-      scheduledTime.minute,
-      timeZone,
-    );
-    const todaysEnd = new Date(todaysStart.getTime() + durationMs);
+    const todaysWindow = this.getRecurringWindow(room, now);
 
-    return now >= todaysStart && now <= todaysEnd;
+    if (!todaysWindow) {
+      return false;
+    }
+
+    return now >= todaysWindow.start && now <= todaysWindow.end;
   }
 
   async createRoom(
@@ -579,6 +637,8 @@ export class RoomsService {
   }
 
   async checkAndSendReminders() {
+    await this.advanceCompletedRecurringRooms();
+
     const now = new Date();
     const in15Minutes = new Date(now.getTime() + 15 * 60000);
 
@@ -615,17 +675,6 @@ export class RoomsService {
         );
       }
 
-      if (room.isRecurring && recurrenceMeta.frequency === 'DAILY') {
-        await this.prisma.room.update({
-          where: { roomId: room.roomId },
-          data: {
-            startTime: new Date(room.startTime.getTime() + 24 * 60 * 60 * 1000),
-            remindersent: false,
-          },
-        });
-        continue;
-      }
-
       await this.prisma.room.update({
         where: { roomId: room.roomId },
         data: { remindersent: true },
@@ -633,6 +682,84 @@ export class RoomsService {
     }
 
     return { success: true, roomsChecked: rooms.length };
+  }
+
+  private async advanceCompletedRecurringRooms() {
+    const now = new Date();
+    const recurringRooms = await this.prisma.room.findMany({
+      where: {
+        isRecurring: true,
+        recurrenceType: {
+          startsWith: 'DAILY|',
+        },
+        startTime: {
+          not: null,
+        },
+        durationMinutes: {
+          not: null,
+        },
+      },
+    });
+
+    for (const room of recurringRooms) {
+      if (!room.startTime || !room.durationMinutes) {
+        continue;
+      }
+
+      let nextStartTime = room.startTime;
+      let nextWindow = this.getRecurringWindow(
+        { ...room, startTime: nextStartTime },
+        nextStartTime,
+      );
+
+      if (!nextWindow || now < nextWindow.end) {
+        continue;
+      }
+
+      while (nextWindow && now >= nextWindow.end) {
+        if (
+          this.shouldStopRecurringRoom({
+            recurrenceEndDate: room.recurrenceEndDate,
+            recurrenceType: room.recurrenceType,
+            startTime: nextStartTime,
+          })
+        ) {
+          await this.prisma.room.update({
+            where: { roomId: room.roomId },
+            data: {
+              isRecurring: false,
+              remindersent: true,
+            },
+          });
+          nextWindow = null;
+          break;
+        }
+
+        nextStartTime = new Date(
+          nextStartTime.getTime() + 24 * 60 * 60 * 1000,
+        );
+        nextWindow = this.getRecurringWindow(
+          { ...room, startTime: nextStartTime },
+          nextStartTime,
+        );
+      }
+
+      if (!nextWindow) {
+        continue;
+      }
+
+      if (nextStartTime.getTime() === room.startTime.getTime()) {
+        continue;
+      }
+
+      await this.prisma.room.update({
+        where: { roomId: room.roomId },
+        data: {
+          startTime: nextStartTime,
+          remindersent: false,
+        },
+      });
+    }
   }
 
   @Cron(CronExpression.EVERY_MINUTE)

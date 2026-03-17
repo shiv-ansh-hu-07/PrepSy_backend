@@ -7,13 +7,31 @@ export class EmailService {
   private readonly resend = process.env.RESEND_API_KEY
     ? new Resend(process.env.RESEND_API_KEY)
     : null;
+  private readonly defaultSenderName = 'Prepsy';
+
+  private getFromAddress() {
+    const from = process.env.EMAIL_FROM?.trim();
+
+    if (!from) {
+      return null;
+    }
+
+    if (from.includes('<') && from.includes('>')) {
+      const address = from.match(/<([^>]+)>/)?.[1]?.trim();
+      return address ? `${this.defaultSenderName} <${address}>` : from;
+    }
+
+    return `${this.defaultSenderName} <${from}>`;
+  }
 
   private async sendEmail(options: {
     to: string;
     subject: string;
     html: string;
   }) {
-    if (!this.resend || !process.env.EMAIL_FROM) {
+    const fromAddress = this.getFromAddress();
+
+    if (!this.resend || !fromAddress) {
       this.logger.warn(
         `Skipping email to ${options.to} because RESEND_API_KEY or EMAIL_FROM is not configured.`,
       );
@@ -22,7 +40,7 @@ export class EmailService {
 
     try {
       await this.resend.emails.send({
-        from: process.env.EMAIL_FROM,
+        from: fromAddress,
         to: options.to,
         subject: options.subject,
         html: options.html,
