@@ -144,13 +144,15 @@ export class AuthService {
       throw new UnauthorizedException('Invalid token');
     }
 
-    const user = await this.prisma.user.findUnique({
+    let user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+
+    user = await this.recordDailyLogin(user);
 
     return {
       id: user.id,
