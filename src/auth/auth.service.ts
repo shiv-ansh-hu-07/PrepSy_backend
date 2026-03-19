@@ -15,6 +15,52 @@ export class AuthService {
     private jwt: JwtService,
   ) {}
 
+  private readonly attendanceTimeZone = 'Asia/Kolkata';
+
+  private getDateKeyInTimeZone(date: Date) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: this.attendanceTimeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  }
+
+  private shiftDateKey(dateKey: string, days: number) {
+    const [yearText, monthText, dayText] = dateKey.split('-');
+    const shifted = new Date(
+      Date.UTC(Number(yearText), Number(monthText) - 1, Number(dayText) + days),
+    );
+    return shifted.toISOString().slice(0, 10);
+  }
+
+  private async getAttendanceStreak(userId: string) {
+    const attendance = await this.prisma.roomAttendance.findMany({
+      where: { userId },
+      select: { joinedAt: true },
+      orderBy: { joinedAt: 'desc' },
+    });
+
+    if (attendance.length === 0) {
+      return 0;
+    }
+
+    const attendanceDays = new Set(
+      attendance.map(({ joinedAt }) => this.getDateKeyInTimeZone(joinedAt)),
+    );
+    const todayKey = this.getDateKeyInTimeZone(new Date());
+
+    let streak = 0;
+    let cursor = todayKey;
+
+    while (attendanceDays.has(cursor)) {
+      streak += 1;
+      cursor = this.shiftDateKey(cursor, -1);
+    }
+
+    return streak;
+  }
+
   // =========================
   // HELPER: SIGN JWT (STANDARD)
   // =========================
@@ -93,10 +139,13 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    const attendanceStreak = await this.getAttendanceStreak(user.id);
+
     return {
       id: user.id,
       email: user.email,
       name: user.name,
+      attendanceStreak,
     };
   }
 

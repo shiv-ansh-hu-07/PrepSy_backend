@@ -14,6 +14,7 @@ import { EmailService } from '../email/email.service';
 @Injectable()
 export class RoomsService {
   private readonly logger = new Logger(RoomsService.name);
+  private readonly attendanceTimeZone = 'Asia/Kolkata';
   private readonly timeZoneAliases: Record<string, string> = {
     'Asia/Calcutta': 'Asia/Kolkata',
   };
@@ -157,6 +158,13 @@ export class RoomsService {
     return asUtc - date.getTime();
   }
 
+  private getDateKeyInTimeZone(date: Date, timeZone: string) {
+    const parts = this.getDatePartsInTimeZone(date, timeZone);
+    const month = String(parts.month).padStart(2, '0');
+    const day = String(parts.day).padStart(2, '0');
+    return `${parts.year}-${month}-${day}`;
+  }
+
   private zonedTimeToUtc(
     year: number,
     month: number,
@@ -168,6 +176,29 @@ export class RoomsService {
     const utcGuess = Date.UTC(year, month - 1, day, hour, minute, 0);
     const offset = this.getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
     return new Date(utcGuess - offset);
+  }
+
+  private getAttendanceWindow(date: Date) {
+    const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
+    const parts = this.getDatePartsInTimeZone(date, timeZone);
+    const start = this.zonedTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day,
+      0,
+      0,
+      timeZone,
+    );
+    const end = this.zonedTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day + 1,
+      0,
+      0,
+      timeZone,
+    );
+
+    return { start, end, timeZone };
   }
 
   private validateTimeZone(timeZone: string) {
@@ -459,11 +490,19 @@ export class RoomsService {
       });
     }
 
-    const alreadyJoined = await this.prisma.roomAttendance.findFirst({
-      where: { roomId, userId },
+    const { start, end } = this.getAttendanceWindow(new Date());
+    const alreadyJoinedToday = await this.prisma.roomAttendance.findFirst({
+      where: {
+        roomId,
+        userId,
+        joinedAt: {
+          gte: start,
+          lt: end,
+        },
+      },
     });
 
-    if (!alreadyJoined) {
+    if (!alreadyJoinedToday) {
       await this.prisma.roomAttendance.create({
         data: { roomId, userId },
       });
@@ -590,8 +629,15 @@ export class RoomsService {
       where: { roomId },
     });
 
+    const { start, end } = this.getAttendanceWindow(new Date());
     const attendance = await this.prisma.roomAttendance.findMany({
-      where: { roomId },
+      where: {
+        roomId,
+        joinedAt: {
+          gte: start,
+          lt: end,
+        },
+      },
     });
 
     const joinedUserIds = attendance.map((entry) => entry.userId);
@@ -610,8 +656,15 @@ export class RoomsService {
 
     if (!room) return;
 
+    const { start, end } = this.getAttendanceWindow(new Date());
     const attendance = await this.prisma.roomAttendance.findMany({
-      where: { roomId },
+      where: {
+        roomId,
+        joinedAt: {
+          gte: start,
+          lt: end,
+        },
+      },
     });
 
     const joinedUserIds = [...new Set(attendance.map((entry) => entry.userId))];
