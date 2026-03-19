@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "User"
+ADD COLUMN "loginStreak" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "lastLoginAt" TIMESTAMP(3);

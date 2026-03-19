@@ -14,6 +14,8 @@ model User {
   password    String?          
   provider    String   @default("local")
   providerId  String?
+  loginStreak Int      @default(0)
+  lastLoginAt DateTime?
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

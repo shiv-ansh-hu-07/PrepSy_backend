@@ -34,31 +34,42 @@ export class AuthService {
     return shifted.toISOString().slice(0, 10);
   }
 
-  private async getAttendanceStreak(userId: string) {
-    const attendance = await this.prisma.roomAttendance.findMany({
-      where: { userId },
-      select: { joinedAt: true },
-      orderBy: { joinedAt: 'desc' },
-    });
-
-    if (attendance.length === 0) {
+  private getCurrentLoginStreak(user: Pick<User, 'loginStreak' | 'lastLoginAt'>) {
+    if (!user.lastLoginAt) {
       return 0;
     }
 
-    const attendanceDays = new Set(
-      attendance.map(({ joinedAt }) => this.getDateKeyInTimeZone(joinedAt)),
-    );
     const todayKey = this.getDateKeyInTimeZone(new Date());
+    const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt);
 
-    let streak = 0;
-    let cursor = todayKey;
-
-    while (attendanceDays.has(cursor)) {
-      streak += 1;
-      cursor = this.shiftDateKey(cursor, -1);
+    if (lastLoginKey !== todayKey) {
+      return 0;
     }
 
-    return streak;
+    return user.loginStreak;
+  }
+
+  private async recordDailyLogin(user: User) {
+    const now = new Date();
+    const todayKey = this.getDateKeyInTimeZone(now);
+    const lastLoginKey = user.lastLoginAt
+      ? this.getDateKeyInTimeZone(user.lastLoginAt)
+      : null;
+
+    if (lastLoginKey === todayKey) {
+      return user;
+    }
+
+    const yesterdayKey = this.shiftDateKey(todayKey, -1);
+    const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        loginStreak: nextStreak,
+        lastLoginAt: now,
+      },
+    });
   }
 
   // =========================
@@ -103,13 +114,15 @@ export class AuthService {
   // LOGIN (EMAIL/PASSWORD)
   // =========================
   async login(email: string, password: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+    let user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) throw new UnauthorizedException('Invalid email or password');
+
+    user = await this.recordDailyLogin(user);
 
     const token = this.signJwt(user);
 
@@ -139,13 +152,11 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    const attendanceStreak = await this.getAttendanceStreak(user.id);
-
     return {
       id: user.id,
       email: user.email,
       name: user.name,
-      attendanceStreak,
+      attendanceStreak: this.getCurrentLoginStreak(user),
     };
   }
 
@@ -176,6 +187,8 @@ export class AuthService {
         },
       });
     }
+
+    user = await this.recordDailyLogin(user);
 
     const token = this.signJwt(user);
 
