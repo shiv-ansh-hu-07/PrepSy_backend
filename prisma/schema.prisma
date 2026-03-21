@@ -54,6 +54,8 @@ model Room {
   messages Message[]
   pomodoro Pomodoro?
   attendance RoomAttendance[]
+
+  @@index([ownerId, createdAt])
 }
 
 enum RoomVisibility {
@@ -69,6 +71,8 @@ model RoomMember {
 
   room Room @relation(fields: [roomId], references: [roomId])
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, roomId])
 }
 
 model Message {

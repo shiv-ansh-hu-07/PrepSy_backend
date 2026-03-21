@@ -6,8 +6,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { v4 as uuid } from 'uuid';
 import { RoomWithRelations } from './room.types';
 import { EmailService } from '../email/email.service';
 
@@ -351,7 +351,7 @@ export class RoomsService {
         ? `${isRecurring ? 'DAILY' : 'ONE_TIME'}|${normalizedTimeZone}`
         : recurrenceType || null;
 
-    const finalRoomId = roomId || uuid();
+    const finalRoomId = roomId || randomUUID();
 
     const room = await this.prisma.$transaction(async (tx) => {
       const createdRoom = await tx.room.create({
@@ -449,21 +449,27 @@ export class RoomsService {
   }
 
   async getMyRooms(userId: string) {
-    const createdRooms = await this.prisma.room.findMany({
-      where: { ownerId: userId },
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        OR: [
+          { ownerId: userId },
+          {
+            members: {
+              some: {
+                userId,
+              },
+            },
+          },
+        ],
+      },
       select: this.roomListSelect,
-    });
-
-    const joinedEntries = await this.prisma.roomMember.findMany({
-      where: { userId },
-      include: {
-        room: {
-          select: this.roomListSelect,
-        },
+      orderBy: {
+        createdAt: 'desc',
       },
     });
 
-    const joinedRooms = joinedEntries.map((entry) => entry.room);
+    const createdRooms = rooms.filter((room) => room.ownerId === userId);
+    const joinedRooms = rooms.filter((room) => room.ownerId !== userId);
 
     return {
       createdRooms,
