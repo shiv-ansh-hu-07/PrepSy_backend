@@ -15,6 +15,17 @@ type AuthUserRecord = Pick<
   streakDisabled: boolean;
 };
 
+const authUserBaseSelect = {
+  id: true,
+  email: true,
+  name: true,
+  password: true,
+  provider: true,
+  providerId: true,
+  loginStreak: true,
+  lastLoginAt: true,
+} satisfies Prisma.UserSelect;
+
 @Injectable()
 export class AuthService {
   private streakDisabledColumnAvailable: boolean | null = null;
@@ -72,16 +83,7 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { email },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: true,
-        provider: true,
-        providerId: true,
-        loginStreak: true,
-        lastLoginAt: true,
-      },
+      select: authUserBaseSelect,
     });
 
     return user ? { ...user, streakDisabled: false } : null;
@@ -96,16 +98,7 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: true,
-        provider: true,
-        providerId: true,
-        loginStreak: true,
-        lastLoginAt: true,
-      },
+      select: authUserBaseSelect,
     });
 
     return user ? { ...user, streakDisabled: false } : null;
@@ -135,16 +128,7 @@ export class AuthService {
           { email: profile.email },
         ],
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: true,
-        provider: true,
-        providerId: true,
-        loginStreak: true,
-        lastLoginAt: true,
-      },
+      select: authUserBaseSelect,
     });
 
     return user ? { ...user, streakDisabled: false } : null;
@@ -187,13 +171,31 @@ export class AuthService {
     const yesterdayKey = this.shiftDateKey(todayKey, -1);
     const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
 
-    return this.prisma.user.update({
+    const canReadStreakDisabled = await this.hasStreakDisabledColumn();
+
+    if (canReadStreakDisabled) {
+      return this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          loginStreak: nextStreak,
+          lastLoginAt: now,
+        },
+      });
+    }
+
+    const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
       data: {
         loginStreak: nextStreak,
         lastLoginAt: now,
       },
+      select: authUserBaseSelect,
     });
+
+    return {
+      ...updatedUser,
+      streakDisabled: false,
+    };
   }
 
   private async applyGuestStreakDisable(user: AuthUserRecord, disableStreak?: boolean) {
@@ -240,6 +242,11 @@ export class AuthService {
         password: hashed,
         name: name ?? '',
         provider: 'local',
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
       },
     });
 
@@ -328,7 +335,17 @@ export class AuthService {
           password: null, // important for Google users
           ...(canWriteStreakDisabled ? { streakDisabled: disableStreak } : {}),
         },
+        select: canWriteStreakDisabled
+          ? undefined
+          : authUserBaseSelect,
       });
+
+      if (!canWriteStreakDisabled && user) {
+        user = {
+          ...user,
+          streakDisabled: false,
+        };
+      }
     }
 
     if (!user) {
