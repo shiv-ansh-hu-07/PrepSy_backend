@@ -40,15 +40,19 @@ export class AuthController {
   login(
     @Body('email') email: string,
     @Body('password') password: string,
+    @Body('disableStreak') disableStreak?: boolean,
   ) {
-    return this.auth.login(email, password);
+    return this.auth.login(email, password, disableStreak);
   }
 
   // =========================
   // GOOGLE OAUTH (ID TOKEN)
   // =========================
   @Post('oauth/google')
-  async googleAuth(@Body('idToken') idToken: string) {
+  async googleAuth(
+    @Body('idToken') idToken: string,
+    @Body('disableStreak') disableStreak?: boolean,
+  ) {
     if (!idToken) {
       throw new UnauthorizedException('Missing Google ID token');
     }
@@ -63,11 +67,15 @@ export class AuthController {
       throw new UnauthorizedException('Invalid Google token payload');
     }
 
-    return this.auth.oauthLogin('google', {
-      email: payload.email,
-      providerId: payload.sub,
-      name: payload.name,
-    });
+    return this.auth.oauthLogin(
+      'google',
+      {
+        email: payload.email,
+        providerId: payload.sub,
+        name: payload.name,
+      },
+      disableStreak,
+    );
   }
 
   // ========================

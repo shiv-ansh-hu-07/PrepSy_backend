@@ -34,7 +34,13 @@ export class AuthService {
     return shifted.toISOString().slice(0, 10);
   }
 
-  private getCurrentLoginStreak(user: Pick<User, 'loginStreak' | 'lastLoginAt'>) {
+  private getCurrentLoginStreak(
+    user: Pick<User, 'loginStreak' | 'lastLoginAt' | 'streakDisabled'>,
+  ) {
+    if (user.streakDisabled) {
+      return 0;
+    }
+
     if (!user.lastLoginAt) {
       return 0;
     }
@@ -50,6 +56,10 @@ export class AuthService {
   }
 
   private async recordDailyLogin(user: User) {
+    if (user.streakDisabled) {
+      return user;
+    }
+
     const now = new Date();
     const todayKey = this.getDateKeyInTimeZone(now);
     const lastLoginKey = user.lastLoginAt
@@ -68,6 +78,21 @@ export class AuthService {
       data: {
         loginStreak: nextStreak,
         lastLoginAt: now,
+      },
+    });
+  }
+
+  private async applyGuestStreakDisable(user: User, disableStreak?: boolean) {
+    if (!disableStreak || user.streakDisabled) {
+      return user;
+    }
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        streakDisabled: true,
+        loginStreak: 0,
+        lastLoginAt: null,
       },
     });
   }
@@ -113,7 +138,7 @@ export class AuthService {
   // =========================
   // LOGIN (EMAIL/PASSWORD)
   // =========================
-  async login(email: string, password: string) {
+  async login(email: string, password: string, disableStreak = false) {
     let user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || !user.password) {
       throw new UnauthorizedException('Invalid email or password');
@@ -122,6 +147,7 @@ export class AuthService {
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) throw new UnauthorizedException('Invalid email or password');
 
+    user = await this.applyGuestStreakDisable(user, disableStreak);
     user = await this.recordDailyLogin(user);
 
     const token = this.signJwt(user);
@@ -132,6 +158,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
+        streakDisabled: user.streakDisabled,
       },
     };
   }
@@ -159,6 +186,7 @@ export class AuthService {
       email: user.email,
       name: user.name,
       attendanceStreak: this.getCurrentLoginStreak(user),
+      streakDisabled: user.streakDisabled,
     };
   }
 
@@ -168,6 +196,7 @@ export class AuthService {
   async oauthLogin(
     provider: 'google',
     profile: { email: string; providerId: string; name?: string },
+    disableStreak = false,
   ) {
     let user = await this.prisma.user.findFirst({
       where: {
@@ -186,10 +215,12 @@ export class AuthService {
           provider,
           providerId: profile.providerId,
           password: null, // important for Google users
+          streakDisabled: disableStreak,
         },
       });
     }
 
+    user = await this.applyGuestStreakDisable(user, disableStreak);
     user = await this.recordDailyLogin(user);
 
     const token = this.signJwt(user);
@@ -200,6 +231,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
+        streakDisabled: user.streakDisabled,
       },
     };
   }
