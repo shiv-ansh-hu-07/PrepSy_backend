@@ -24,6 +24,8 @@ model User {
   roomsOwned  Room[]       @relation("UserOwnedRooms")
   roomMembers RoomMember[]
   attendance  RoomAttendance[]
+  communityPosts   CommunityPost[]
+  communityReplies CommunityReply[]
 
   @@unique([provider, providerId])
 }
@@ -111,4 +113,35 @@ model RoomAttendance {
   user User @relation(fields: [userId], references: [id])
 
   @@index([roomId])
+}
+
+model CommunityPost {
+  id        String   @id @default(cuid())
+  authorId  String
+  title     String
+  content   String
+  tags      String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author  User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  replies CommunityReply[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([authorId, createdAt(sort: Desc)])
+}
+
+model CommunityReply {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  post   CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@index([authorId, createdAt(sort: Desc)])
 }
