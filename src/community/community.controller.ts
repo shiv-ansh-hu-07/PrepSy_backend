@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -30,6 +32,12 @@ export class CommunityController {
     @Query('tag') tag?: string,
   ) {
     return this.communityService.listPosts(search, tag);
+  }
+
+  @Get('posts/mine')
+  @UseGuards(JwtAuthGuard)
+  listMyPosts(@Req() req: any) {
+    return this.communityService.listMyPosts(this.getUserId(req));
   }
 
   @Get('posts/:postId')
@@ -63,5 +71,31 @@ export class CommunityController {
     @Body('content') content: string,
   ) {
     return this.communityService.createReply(this.getUserId(req), postId, content);
+  }
+
+  @Patch('posts/:postId')
+  @UseGuards(JwtAuthGuard)
+  updatePost(
+    @Req() req: any,
+    @Param('postId') postId: string,
+    @Body('title') title: string,
+    @Body('content') content: string,
+    @Body('tags') tags?: string[],
+    @Body('applicationLink') applicationLink?: string,
+  ) {
+    return this.communityService.updatePost(
+      this.getUserId(req),
+      postId,
+      title,
+      content,
+      tags,
+      applicationLink,
+    );
+  }
+
+  @Delete('posts/:postId')
+  @UseGuards(JwtAuthGuard)
+  deletePost(@Req() req: any, @Param('postId') postId: string) {
+    return this.communityService.deletePost(this.getUserId(req), postId);
   }
 }

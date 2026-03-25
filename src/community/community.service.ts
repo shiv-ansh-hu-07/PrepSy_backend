@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -124,6 +125,23 @@ export class CommunityService {
               }
             : {},
         ],
+      },
+      select: this.postSummarySelect,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 50,
+    });
+
+    return {
+      posts: posts.map((post) => this.mapPostSummary(post)),
+    };
+  }
+
+  async listMyPosts(userId: string) {
+    const posts = await this.prisma.communityPost.findMany({
+      where: {
+        authorId: userId,
       },
       select: this.postSummarySelect,
       orderBy: {
@@ -281,6 +299,85 @@ export class CommunityService {
           name: this.normalizeAuthorName(reply.author),
         },
       },
+    };
+  }
+
+  async updatePost(
+    userId: string,
+    postId: string,
+    title: string,
+    content: string,
+    tags?: string[],
+    applicationLink?: string,
+  ) {
+    const cleanTitle = title?.trim();
+    const cleanContent = content?.trim();
+
+    if (!cleanTitle) {
+      throw new BadRequestException('Post title is required');
+    }
+
+    if (!cleanContent) {
+      throw new BadRequestException('Post content is required');
+    }
+
+    if (cleanTitle.length > 140) {
+      throw new BadRequestException('Post title must be 140 characters or fewer');
+    }
+
+    if (cleanContent.length > 5000) {
+      throw new BadRequestException('Post content must be 5000 characters or fewer');
+    }
+
+    const existingPost = await this.prisma.communityPost.findUnique({
+      where: { id: postId },
+      select: { id: true, authorId: true },
+    });
+
+    if (!existingPost) {
+      throw new NotFoundException('Post not found');
+    }
+
+    if (existingPost.authorId !== userId) {
+      throw new ForbiddenException('You can only edit your own posts');
+    }
+
+    const updatedPost = await this.prisma.communityPost.update({
+      where: { id: postId },
+      data: {
+        title: cleanTitle,
+        content: cleanContent,
+        applicationLink: this.normalizeApplicationLink(applicationLink),
+        tags: this.normalizeTags(tags),
+      },
+      select: this.postSummarySelect,
+    });
+
+    return {
+      post: this.mapPostSummary(updatedPost),
+    };
+  }
+
+  async deletePost(userId: string, postId: string) {
+    const existingPost = await this.prisma.communityPost.findUnique({
+      where: { id: postId },
+      select: { id: true, authorId: true },
+    });
+
+    if (!existingPost) {
+      throw new NotFoundException('Post not found');
+    }
+
+    if (existingPost.authorId !== userId) {
+      throw new ForbiddenException('You can only delete your own posts');
+    }
+
+    await this.prisma.communityPost.delete({
+      where: { id: postId },
+    });
+
+    return {
+      success: true,
     };
   }
 }
