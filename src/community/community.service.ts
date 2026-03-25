@@ -13,6 +13,7 @@ export class CommunityService {
     id: true,
     title: true,
     content: true,
+    applicationLink: true,
     tags: true,
     createdAt: true,
     updatedAt: true,
@@ -45,10 +46,33 @@ export class CommunityService {
     return author.name?.trim() || author.email.split('@')[0] || 'Anonymous';
   }
 
+  private normalizeApplicationLink(applicationLink?: string) {
+    const cleanLink = applicationLink?.trim();
+
+    if (!cleanLink) {
+      return null;
+    }
+
+    try {
+      const url = new URL(cleanLink);
+
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        throw new Error('Unsupported protocol');
+      }
+
+      return url.toString();
+    } catch {
+      throw new BadRequestException(
+        'Application link must be a valid http or https URL',
+      );
+    }
+  }
+
   private mapPostSummary(post: {
     id: string;
     title: string;
     content: string;
+    applicationLink: string | null;
     tags: string[];
     createdAt: Date;
     updatedAt: Date;
@@ -65,6 +89,7 @@ export class CommunityService {
       id: post.id,
       title: post.title,
       content: post.content,
+      applicationLink: post.applicationLink,
       tags: post.tags,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
@@ -166,7 +191,13 @@ export class CommunityService {
     };
   }
 
-  async createPost(userId: string, title: string, content: string, tags?: string[]) {
+  async createPost(
+    userId: string,
+    title: string,
+    content: string,
+    tags?: string[],
+    applicationLink?: string,
+  ) {
     const cleanTitle = title?.trim();
     const cleanContent = content?.trim();
 
@@ -191,6 +222,7 @@ export class CommunityService {
         authorId: userId,
         title: cleanTitle,
         content: cleanContent,
+        applicationLink: this.normalizeApplicationLink(applicationLink),
         tags: this.normalizeTags(tags),
       },
       select: this.postSummarySelect,

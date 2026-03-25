@@ -120,6 +120,7 @@ model CommunityPost {
   authorId  String
   title     String
   content   String
+  applicationLink String?
   tags      String[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

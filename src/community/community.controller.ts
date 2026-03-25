@@ -44,12 +44,14 @@ export class CommunityController {
     @Body('title') title: string,
     @Body('content') content: string,
     @Body('tags') tags?: string[],
+    @Body('applicationLink') applicationLink?: string,
   ) {
     return this.communityService.createPost(
       this.getUserId(req),
       title,
       content,
       tags,
+      applicationLink,
     );
   }
 
