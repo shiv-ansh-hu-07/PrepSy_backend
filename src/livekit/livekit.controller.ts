@@ -58,6 +58,7 @@ export class LivekitController {
       where: { roomId: room },
       select: {
         roomId: true,
+        name: true,
         startTime: true,
       },
     });
@@ -128,6 +129,7 @@ export class LivekitController {
     return res.json({
       token: jwt,
       url: process.env.LIVEKIT_WS_URL,
+      roomName: roomRecord.name,
     });
   }
 }
