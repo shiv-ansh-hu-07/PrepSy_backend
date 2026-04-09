@@ -217,6 +217,90 @@ export class AuthService {
     });
   }
 
+  private async createLocalUser(
+    email: string,
+    hashedPassword: string,
+    name?: string,
+  ) {
+    const canWriteStreakDisabled = await this.hasStreakDisabledColumn();
+
+    if (canWriteStreakDisabled) {
+      return this.prisma.user.create({
+        data: {
+          email,
+          password: hashedPassword,
+          name: name ?? '',
+          provider: 'local',
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+        },
+      });
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; email: string; name: string | null }>
+    >(
+      Prisma.sql`
+        INSERT INTO "User" ("email", "password", "name", "provider")
+        VALUES (${email}, ${hashedPassword}, ${name ?? ''}, 'local')
+        RETURNING "id", "email", "name"
+      `,
+    );
+
+    return rows[0];
+  }
+
+  private async createOauthUser(
+    provider: 'google',
+    profile: { email: string; providerId: string; name?: string },
+    disableStreak = false,
+  ): Promise<AuthUserRecord> {
+    const canWriteStreakDisabled = await this.hasStreakDisabledColumn();
+
+    if (canWriteStreakDisabled) {
+      return this.prisma.user.create({
+        data: {
+          email: profile.email,
+          name: profile.name ?? '',
+          provider,
+          providerId: profile.providerId,
+          password: null,
+          streakDisabled: disableStreak,
+        },
+      });
+    }
+
+    const rows = await this.prisma.$queryRaw<
+      Array<
+        Pick<
+          AuthUserRecord,
+          | 'id'
+          | 'email'
+          | 'name'
+          | 'password'
+          | 'provider'
+          | 'providerId'
+          | 'loginStreak'
+          | 'lastLoginAt'
+        >
+      >
+    >(
+      Prisma.sql`
+        INSERT INTO "User" ("email", "name", "provider", "providerId", "password")
+        VALUES (${profile.email}, ${profile.name ?? ''}, ${provider}, ${profile.providerId}, ${null})
+        RETURNING "id", "email", "name", "password", "provider", "providerId", "loginStreak", "lastLoginAt"
+      `,
+    );
+
+    return {
+      ...rows[0],
+      streakDisabled: false,
+    };
+  }
+
   // =========================
   // HELPER: SIGN JWT (STANDARD)
   // =========================
@@ -236,19 +320,7 @@ export class AuthService {
 
     const hashed = await bcrypt.hash(password, 10);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        password: hashed,
-        name: name ?? '',
-        provider: 'local',
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
+    const user = await this.createLocalUser(email, hashed, name);
 
     return {
       message: 'User registered successfully',
@@ -326,19 +398,7 @@ export class AuthService {
 
     if (!user) {
       const canWriteStreakDisabled = await this.hasStreakDisabledColumn();
-      user = await this.prisma.user.create({
-        data: {
-          email: profile.email,
-          name: profile.name ?? '',
-          provider,
-          providerId: profile.providerId,
-          password: null, // important for Google users
-          ...(canWriteStreakDisabled ? { streakDisabled: disableStreak } : {}),
-        },
-        select: canWriteStreakDisabled
-          ? undefined
-          : authUserBaseSelect,
-      });
+      user = await this.createOauthUser(provider, profile, disableStreak);
 
       if (!canWriteStreakDisabled && user) {
         user = {
