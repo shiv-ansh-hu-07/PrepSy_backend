@@ -30,6 +30,7 @@ export class RoomsService {
     durationMinutes: true,
     isRecurring: true,
     recurrenceType: true,
+    recurrenceEndDate: true,
   } as const;
 
   constructor(
@@ -297,6 +298,32 @@ export class RoomsService {
     return now >= todaysWindow.start && now <= todaysWindow.end;
   }
 
+  private shouldShowPublicRoom(room: {
+    startTime: Date | null;
+    durationMinutes: number | null;
+    isRecurring: boolean;
+    recurrenceType: string | null;
+    recurrenceEndDate?: Date | null;
+  }) {
+    if (!room.startTime || !room.durationMinutes) {
+      return false;
+    }
+
+    if (room.isRecurring) {
+      return !this.shouldStopRecurringRoom({
+        recurrenceEndDate: room.recurrenceEndDate ?? null,
+        recurrenceType: room.recurrenceType,
+        startTime: room.startTime,
+      });
+    }
+
+    const endTime = new Date(
+      room.startTime.getTime() + room.durationMinutes * 60 * 1000,
+    );
+
+    return new Date() <= endTime;
+  }
+
   async createRoom(
     name: string,
     roomId: string,
@@ -427,7 +454,7 @@ export class RoomsService {
     });
 
     return {
-      rooms: rooms.filter((room) => this.isRoomActive(room)),
+      rooms: rooms.filter((room) => this.shouldShowPublicRoom(room)),
     };
   }
 
