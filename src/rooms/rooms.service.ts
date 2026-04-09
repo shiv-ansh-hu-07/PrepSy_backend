@@ -413,6 +413,9 @@ export class RoomsService {
     if (resolvedStartTime) {
       const owner = await this.prisma.user.findUnique({
         where: { id: userId },
+        select: {
+          email: true,
+        },
       });
 
       if (owner?.email) {
@@ -709,6 +712,9 @@ export class RoomsService {
 
     const targetUser = await this.prisma.user.findUnique({
       where: { id: targetUserId },
+      select: {
+        email: true,
+      },
     });
 
     if (!targetUser?.email) {
@@ -749,6 +755,9 @@ export class RoomsService {
       for (const member of members) {
         const user = await this.prisma.user.findUnique({
           where: { id: member.userId },
+          select: {
+            email: true,
+          },
         });
 
         if (!user?.email) continue;
