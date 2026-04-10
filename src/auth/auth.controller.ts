@@ -16,7 +16,14 @@ export class AuthController {
   private googleClient: OAuth2Client;
 
   constructor(private readonly auth: AuthService) {
-    this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+    this.googleClient = new OAuth2Client();
+  }
+
+  private getGoogleAudiences() {
+    return (process.env.GOOGLE_CLIENT_ID || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
   }
 
   // =========================
@@ -57,9 +64,14 @@ export class AuthController {
       throw new UnauthorizedException('Missing Google ID token');
     }
 
+    const audiences = this.getGoogleAudiences();
+    if (audiences.length === 0) {
+      throw new UnauthorizedException('Google login is not configured');
+    }
+
     const ticket = await this.googleClient.verifyIdToken({
       idToken,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: audiences.length === 1 ? audiences[0] : audiences,
     });
 
     const payload = ticket.getPayload();
