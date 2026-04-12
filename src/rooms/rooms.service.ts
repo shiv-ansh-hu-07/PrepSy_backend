@@ -101,7 +101,10 @@ export class RoomsService {
       room.recurrenceEndDate,
       timeZone,
     );
-    const startDateParts = this.getDatePartsInTimeZone(room.startTime, timeZone);
+    const startDateParts = this.getDatePartsInTimeZone(
+      room.startTime,
+      timeZone,
+    );
 
     const endKey = Date.UTC(
       endDateParts.year,
@@ -288,7 +291,6 @@ export class RoomsService {
       return now >= room.startTime && now <= endTime;
     }
 
-    const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
     const todaysWindow = this.getRecurringWindow(room, now);
 
     if (!todaysWindow) {
@@ -745,30 +747,34 @@ export class RoomsService {
     });
 
     for (const room of rooms) {
-      if (!room.startTime) continue;
+      const startTime = room.startTime;
+      if (!startTime) continue;
 
       const recurrenceMeta = this.parseRecurrenceMeta(room.recurrenceType);
       const members = await this.prisma.roomMember.findMany({
         where: { roomId: room.roomId },
+        select: {
+          user: {
+            select: {
+              email: true,
+            },
+          },
+        },
       });
 
-      for (const member of members) {
-        const user = await this.prisma.user.findUnique({
-          where: { id: member.userId },
-          select: {
-            email: true,
-          },
-        });
-
-        if (!user?.email) continue;
-
-        await this.emailService.sendReminderEmail(
-          user.email,
-          room.name,
-          room.startTime,
-          recurrenceMeta.timeZone || undefined,
-        );
-      }
+      await Promise.all(
+        members
+          .map((member) => member.user.email)
+          .filter((email): email is string => Boolean(email))
+          .map((email) =>
+            this.emailService.sendReminderEmail(
+              email,
+              room.name,
+              startTime,
+              recurrenceMeta.timeZone || undefined,
+            ),
+          ),
+      );
 
       await this.prisma.room.update({
         where: { roomId: room.roomId },
@@ -830,9 +836,7 @@ export class RoomsService {
           break;
         }
 
-        nextStartTime = new Date(
-          nextStartTime.getTime() + 24 * 60 * 60 * 1000,
-        );
+        nextStartTime = new Date(nextStartTime.getTime() + 24 * 60 * 60 * 1000);
         nextWindow = this.getRecurringWindow(
           { ...room, startTime: nextStartTime },
           nextStartTime,

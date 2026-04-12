@@ -10,7 +10,14 @@ import { Prisma, User } from '@prisma/client';
 
 type AuthUserRecord = Pick<
   User,
-  'id' | 'email' | 'name' | 'password' | 'provider' | 'providerId' | 'loginStreak' | 'lastLoginAt'
+  | 'id'
+  | 'email'
+  | 'name'
+  | 'password'
+  | 'provider'
+  | 'providerId'
+  | 'loginStreak'
+  | 'lastLoginAt'
 > & {
   streakDisabled: boolean;
 };
@@ -134,7 +141,12 @@ export class AuthService {
     return user ? { ...user, streakDisabled: false } : null;
   }
 
-  private getCurrentLoginStreak(user: Pick<AuthUserRecord, 'loginStreak' | 'lastLoginAt' | 'streakDisabled'>) {
+  private getCurrentLoginStreak(
+    user: Pick<
+      AuthUserRecord,
+      'loginStreak' | 'lastLoginAt' | 'streakDisabled'
+    >,
+  ) {
     if (user.streakDisabled) {
       return 0;
     }
@@ -153,7 +165,9 @@ export class AuthService {
     return user.loginStreak;
   }
 
-  private async recordDailyLogin(user: AuthUserRecord): Promise<AuthUserRecord> {
+  private async recordDailyLogin(
+    user: AuthUserRecord,
+  ): Promise<AuthUserRecord> {
     if (user.streakDisabled) {
       return user;
     }
@@ -198,7 +212,10 @@ export class AuthService {
     };
   }
 
-  private async applyGuestStreakDisable(user: AuthUserRecord, disableStreak?: boolean) {
+  private async applyGuestStreakDisable(
+    user: AuthUserRecord,
+    disableStreak?: boolean,
+  ) {
     if (
       !disableStreak ||
       user.streakDisabled ||

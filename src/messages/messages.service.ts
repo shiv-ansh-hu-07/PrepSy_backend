@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateMessageDto } from './message.dto';
 
 @Injectable()
 export class MessagesService {
   constructor(private prisma: PrismaService) {}
 
-  async create(data: any) {
+  async create(data: CreateMessageDto) {
     return this.prisma.message.create({
       data: {
         roomId: data.roomId,

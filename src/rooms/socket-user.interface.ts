@@ -1,9 +1,8 @@
 import { Socket } from 'socket.io';
+import { AuthUserPayload } from '../auth/auth-user.interface';
 
 export interface AuthenticatedSocket extends Socket {
-  user?: {
-    id?: string;
-    name?: string;
-    email?: string;
+  data: {
+    user?: AuthUserPayload;
   };
 }

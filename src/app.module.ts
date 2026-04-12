@@ -5,7 +5,7 @@ import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { StatsModule } from './stats/stats.module';
-import { LivekitController } from "./livekit/livekit.controller";
+import { LivekitController } from './livekit/livekit.controller';
 import { MessagesModule } from './messages/messages.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CommunityModule } from './community/community.module';

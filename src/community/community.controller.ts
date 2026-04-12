@@ -13,12 +13,13 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CommunityService } from './community.service';
+import type { RequestWithUser } from '../auth/auth-user.interface';
 
 @Controller('community')
 export class CommunityController {
   constructor(private readonly communityService: CommunityService) {}
 
-  private getUserId(req: any) {
+  private getUserId(req: RequestWithUser) {
     const userId = req?.user?.id || req?.user?.sub;
     if (!userId) {
       throw new UnauthorizedException('Invalid user token');
@@ -27,16 +28,13 @@ export class CommunityController {
   }
 
   @Get('posts')
-  listPosts(
-    @Query('search') search?: string,
-    @Query('tag') tag?: string,
-  ) {
+  listPosts(@Query('search') search?: string, @Query('tag') tag?: string) {
     return this.communityService.listPosts(search, tag);
   }
 
   @Get('posts/mine')
   @UseGuards(JwtAuthGuard)
-  listMyPosts(@Req() req: any) {
+  listMyPosts(@Req() req: RequestWithUser) {
     return this.communityService.listMyPosts(this.getUserId(req));
   }
 
@@ -48,7 +46,7 @@ export class CommunityController {
   @Post('posts')
   @UseGuards(JwtAuthGuard)
   createPost(
-    @Req() req: any,
+    @Req() req: RequestWithUser,
     @Body('title') title: string,
     @Body('content') content: string,
     @Body('tags') tags?: string[],
@@ -66,17 +64,21 @@ export class CommunityController {
   @Post('posts/:postId/replies')
   @UseGuards(JwtAuthGuard)
   createReply(
-    @Req() req: any,
+    @Req() req: RequestWithUser,
     @Param('postId') postId: string,
     @Body('content') content: string,
   ) {
-    return this.communityService.createReply(this.getUserId(req), postId, content);
+    return this.communityService.createReply(
+      this.getUserId(req),
+      postId,
+      content,
+    );
   }
 
   @Patch('posts/:postId')
   @UseGuards(JwtAuthGuard)
   updatePost(
-    @Req() req: any,
+    @Req() req: RequestWithUser,
     @Param('postId') postId: string,
     @Body('title') title: string,
     @Body('content') content: string,
@@ -95,7 +97,7 @@ export class CommunityController {
 
   @Delete('posts/:postId')
   @UseGuards(JwtAuthGuard)
-  deletePost(@Req() req: any, @Param('postId') postId: string) {
+  deletePost(@Req() req: RequestWithUser, @Param('postId') postId: string) {
     return this.communityService.deletePost(this.getUserId(req), postId);
   }
 }

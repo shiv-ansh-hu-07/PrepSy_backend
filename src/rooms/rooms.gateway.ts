@@ -1,20 +1,31 @@
-// src/rooms/rooms.gateway.ts
 import {
-  WebSocketGateway,
-  WebSocketServer,
-  SubscribeMessage,
-  MessageBody,
   ConnectedSocket,
+  MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
 } from '@nestjs/websockets';
-import { Server, Socket } from 'socket.io';
-import { JwtService } from '@nestjs/jwt';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { Server } from 'socket.io';
+import type { AuthUserPayload } from '../auth/auth-user.interface';
 import { RoomsService } from './rooms.service';
 import { RoomWithRelations } from './room.types';
-import * as socketUserInterface from './socket-user.interface';
+import type { AuthenticatedSocket } from './socket-user.interface';
 
+type SignalPayload = {
+  roomId: string;
+  toSocketId: string;
+  sdp: unknown;
+};
+
+type IcePayload = {
+  roomId: string;
+  toSocketId: string;
+  candidate: unknown;
+};
 
 @WebSocketGateway({
   namespace: 'rooms',
@@ -25,45 +36,62 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  constructor(private jwt: JwtService, private roomsService: RoomsService) { }
+  constructor(
+    private readonly jwt: JwtService,
+    private readonly roomsService: RoomsService,
+  ) {}
 
-  private socketUserMap: Record<string, string> = {};
-  private roomMembers: Record<string, string[]> = {};
+  private readonly socketUserMap: Record<string, string> = {};
+  private readonly roomMembers: Record<string, string[]> = {};
+  private readonly pending = new Map<string, boolean>();
 
-  // Track pending negotiations to prevent duplicate/late answers
-  private pending: Map<string, boolean> = new Map();
-  private key = (from: string, to: string, type: string) => `${from}->${to}:${type}`;
+  private key(from: string, to: string, type: string) {
+    return `${from}->${to}:${type}`;
+  }
 
-  async handleConnection(client: Socket) {
+  handleConnection(client: AuthenticatedSocket) {
     try {
-      const token =
-        client.handshake.auth?.token ||
-        client.handshake.headers?.authorization?.replace('Bearer ', '');
+      const authToken =
+        typeof client.handshake.auth?.token === 'string'
+          ? client.handshake.auth.token
+          : null;
+      const headerValue =
+        typeof client.handshake.headers?.authorization === 'string'
+          ? client.handshake.headers.authorization
+          : null;
+      const token = authToken || headerValue?.replace('Bearer ', '') || null;
 
-      if (!token) throw new UnauthorizedException('No token');
+      if (!token) {
+        throw new UnauthorizedException('No token');
+      }
 
-      const payload = this.jwt.verify(token, {
+      const payload = this.jwt.verify<AuthUserPayload>(token, {
         secret: process.env.JWT_SECRET,
       });
 
       client.data.user = payload;
       this.socketUserMap[client.id] = payload.id || payload.sub || client.id;
 
-      console.log('🟢 Socket connected:', client.id);
-    } catch (err) {
-      console.log('❌ WebSocket auth failed:', client.id, err?.message);
+      console.log('Socket connected:', client.id);
+    } catch (error) {
+      console.log(
+        'WebSocket auth failed:',
+        client.id,
+        error instanceof Error ? error.message : 'Unknown auth error',
+      );
       client.disconnect();
     }
   }
 
-  handleDisconnect(client: Socket) {
+  handleDisconnect(client: AuthenticatedSocket) {
     const socketId = client.id;
 
     for (const roomId of Object.keys(this.roomMembers)) {
-      const idx = this.roomMembers[roomId]?.indexOf(socketId);
-      if (idx !== -1) {
-        this.roomMembers[roomId].splice(idx, 1);
+      const room = this.roomMembers[roomId];
+      const idx = room?.indexOf(socketId) ?? -1;
 
+      if (idx !== -1) {
+        room.splice(idx, 1);
         this.server.to(roomId).emit('user-left', {
           socketId,
           userId: this.socketUserMap[socketId],
@@ -72,66 +100,92 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     delete this.socketUserMap[socketId];
-    console.log('🔴 Client disconnected:', socketId);
+    console.log('Client disconnected:', socketId);
   }
 
-  // -------------------------------------------------------------
-  // JOIN ROOM
-  // -------------------------------------------------------------
   @SubscribeMessage('joinRoom')
   async joinRoom(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() body: { roomId: string },
   ) {
     const { roomId } = body;
-    const user = client.data.user;
-    if (!user) throw new UnauthorizedException();
+    this.getSocketUser(client);
+    const userId = this.getRequiredSocketUserId(client);
 
-    client.join(roomId);
+    void client.join(roomId);
+    this.roomMembers[roomId] ??= [];
 
-    if (!this.roomMembers[roomId]) this.roomMembers[roomId] = [];
     if (!this.roomMembers[roomId].includes(client.id)) {
       this.roomMembers[roomId].push(client.id);
     }
 
     try {
-      await this.roomsService.joinRoom(roomId, user.id || user.sub || client.id);
-    } catch { }
+      await this.roomsService.joinRoom(roomId, userId);
+
+      const absentMembers = await this.roomsService.getAbsentMembers(roomId);
+      for (const member of absentMembers) {
+        if (member.userId === userId) {
+          continue;
+        }
+
+        try {
+          await this.roomsService.notifyUserRoomJoined(
+            member.userId,
+            roomId,
+            userId,
+          );
+        } catch (error) {
+          console.log(
+            'Join notification failed:',
+            error instanceof Error
+              ? error.message
+              : 'Unknown join notification error',
+          );
+        }
+      }
+    } catch (error) {
+      console.log(
+        'Join logic error:',
+        error instanceof Error ? error.message : 'Unknown join logic error',
+      );
+    }
 
     const existing = this.roomMembers[roomId].filter((id) => id !== client.id);
     client.emit('existing-users', { existing });
 
     client.broadcast.to(roomId).emit('user-joined', {
       socketId: client.id,
-      userId: user.id || user.sub,
+      userId,
     });
 
     try {
-      const roomDetails: RoomWithRelations = await this.roomsService.getRoomDetails(roomId);
+      const roomDetails: RoomWithRelations =
+        await this.roomsService.getRoomDetails(roomId);
+
       client.emit('roomUsers', {
-        users: (roomDetails?.members || []).map((m) => ({
-          userId: m.userId,
-          joinedAt: m.joinedAt,
+        users: (roomDetails.members || []).map((member) => ({
+          userId: member.userId,
+          joinedAt: member.joinedAt,
         })),
-        pomodoro: roomDetails?.pomodoro || null,
-        messages: roomDetails?.messages || [],
+        pomodoro: roomDetails.pomodoro || null,
+        messages: roomDetails.messages || [],
       });
-    } catch { }
+    } catch (error) {
+      console.log(
+        'Room details fetch failed:',
+        error instanceof Error ? error.message : 'Unknown room details error',
+      );
+    }
 
     return { joined: true };
   }
 
-  // -------------------------------------------------------------
-  // OFFER (media)
-  // -------------------------------------------------------------
   @SubscribeMessage('offer')
   handleOffer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { roomId: string; toSocketId: string; sdp: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SignalPayload,
   ) {
     const { roomId, toSocketId, sdp } = data;
-
-    // Mark negotiation pending for this pair
     this.pending.set(this.key(client.id, toSocketId, 'media'), true);
 
     this.server.to(toSocketId).emit('offer', {
@@ -139,45 +193,35 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       fromSocketId: client.id,
       sdp,
     });
-
-    console.log(`📡 OFFER (media) from=${client.id} → ${toSocketId}`);
   }
 
-  // -------------------------------------------------------------
-  // ANSWER (media)
-  // -------------------------------------------------------------
   @SubscribeMessage('answer')
   handleAnswer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { roomId: string; toSocketId: string; sdp: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SignalPayload,
   ) {
     const { roomId, toSocketId, sdp } = data;
+    const pendingKey = this.key(toSocketId, client.id, 'media');
 
-    const k = this.key(toSocketId, client.id, 'media');
-    if (!this.pending.has(k)) {
-      console.warn(`⚠️ Dropping duplicate/late media-answer for pair ${k}`);
+    if (!this.pending.has(pendingKey)) {
+      console.warn(
+        `Dropping duplicate/late media-answer for pair ${pendingKey}`,
+      );
       return;
     }
 
-    this.pending.delete(k);
-
+    this.pending.delete(pendingKey);
     this.server.to(toSocketId).emit('answer', {
       roomId,
       fromSocketId: client.id,
       sdp,
     });
-
-    console.log(`📡 ANSWER (media) from=${client.id} → ${toSocketId}`);
   }
 
-  // -------------------------------------------------------------
-  // ICE CANDIDATE (media)
-  // -------------------------------------------------------------
   @SubscribeMessage('ice-candidate')
   handleIce(
-    @ConnectedSocket() client: Socket,
-    @MessageBody()
-    data: { roomId: string; toSocketId: string; candidate: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: IcePayload,
   ) {
     const { roomId, toSocketId, candidate } = data;
 
@@ -188,38 +232,29 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  // -------------------------------------------------------------
-  // SCREEN SHARE CHANNEL
-  // -------------------------------------------------------------
   @SubscribeMessage('join-screen')
   handleJoinScreen(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { roomId: string },
   ) {
-    const roomId = data?.roomId;
-    if (!roomId) return;
-    client.join(`${roomId}-screen`);
+    const roomId = data.roomId;
+    if (!roomId) {
+      return;
+    }
 
-    // NEW: notify others in the room that this user started screen sharing
+    void client.join(`${roomId}-screen`);
     client.to(roomId).emit('user-started-screen', {
       socketId: client.id,
-      userId: client.data?.user?.id || client.data?.user?.sub,
+      userId: this.getSocketUserId(client),
     });
-
-    console.log(`🖥️ Screen-mode join: ${client.id} (room ${roomId})`);
   }
 
-  // -------------------------------------------------------------
-  // SCREEN OFFER
-  // -------------------------------------------------------------
   @SubscribeMessage('screen-offer')
   handleScreenOffer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody()
-    data: { roomId: string; toSocketId: string; sdp: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SignalPayload,
   ) {
     const { roomId, toSocketId, sdp } = data;
-
     this.pending.set(this.key(client.id, toSocketId, 'screen'), true);
 
     this.server.to(toSocketId).emit('screen-offer', {
@@ -227,46 +262,35 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       fromSocketId: client.id,
       sdp,
     });
-
-    console.log(`📡 SCREEN OFFER from=${client.id} → ${toSocketId}`);
   }
 
-  // -------------------------------------------------------------
-  // SCREEN ANSWER
-  // -------------------------------------------------------------
   @SubscribeMessage('screen-answer')
   handleScreenAnswer(
-    @ConnectedSocket() client: Socket,
-    @MessageBody()
-    data: { roomId: string; toSocketId: string; sdp: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SignalPayload,
   ) {
     const { roomId, toSocketId, sdp } = data;
+    const pendingKey = this.key(toSocketId, client.id, 'screen');
 
-    const k = this.key(toSocketId, client.id, 'screen');
-    if (!this.pending.has(k)) {
-      console.warn(`⚠️ Dropping duplicate/late screen-answer for pair ${k}`);
+    if (!this.pending.has(pendingKey)) {
+      console.warn(
+        `Dropping duplicate/late screen-answer for pair ${pendingKey}`,
+      );
       return;
     }
 
-    this.pending.delete(k);
-
+    this.pending.delete(pendingKey);
     this.server.to(toSocketId).emit('screen-answer', {
       roomId,
       fromSocketId: client.id,
       sdp,
     });
-
-    console.log(`📡 SCREEN ANSWER from=${client.id} → ${toSocketId}`);
   }
 
-  // -------------------------------------------------------------
-  // SCREEN ICE
-  // -------------------------------------------------------------
   @SubscribeMessage('screen-ice')
   handleScreenIce(
-    @ConnectedSocket() client: Socket,
-    @MessageBody()
-    data: { roomId: string; toSocketId: string; candidate: any },
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: IcePayload,
   ) {
     const { roomId, toSocketId, candidate } = data;
 
@@ -277,33 +301,24 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  // -------------------------------------------------------------
-  // SCREEN SHARE STOP (NEW)
-  // -------------------------------------------------------------
   @SubscribeMessage('leave-screen')
   handleLeaveScreen(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { roomId: string },
   ) {
-    const { roomId } = data || {};
-    if (!roomId) return;
+    const { roomId } = data;
+    if (!roomId) {
+      return;
+    }
 
-    // Notify others that this user stopped screen sharing
     client.to(roomId).emit('user-stopped-screen', {
       socketId: client.id,
-      userId: client.data?.user?.id || client.data?.user?.sub,
+      userId: this.getSocketUserId(client),
     });
-
-    console.log(`🛑 Screen share stopped by ${client.id} (room ${roomId})`);
   }
 
-  // -------------------------------------------------------------
-  // POMODORO + CHAT (unchanged)
-  // -------------------------------------------------------------
   @SubscribeMessage('startPomodoro')
-  async startPomodoro(
-    @MessageBody() data: { roomId: string; minutes: number },
-  ) {
+  startPomodoro(@MessageBody() data: { roomId: string; minutes: number }) {
     const duration = Math.max(1, Number(data.minutes)) * 60;
     let remaining = duration;
 
@@ -318,30 +333,46 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.server.to(data.roomId).emit('pomodoroUpdate', { remaining });
       }
     }, 1000);
+
+    void interval;
   }
 
-  @SubscribeMessage("chat:message")
-async handleChatMessage(
-  @ConnectedSocket() client: Socket,
-  @MessageBody() data: { roomId: string; text: string }
-) {
-  const user = client.data.user;
+  @SubscribeMessage('chat:message')
+  async handleChatMessage(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { roomId: string; text: string },
+  ) {
+    const user = this.getSocketUser(client);
 
-  if (!user) {
-    throw new UnauthorizedException();
+    const savedMessage = await this.roomsService.saveMessage(
+      data.roomId,
+      this.getRequiredSocketUserId(client),
+      data.text,
+      user.name,
+    );
+
+    this.server.to(data.roomId).emit('chat:message', savedMessage);
   }
 
-  const savedMessage = await this.roomsService.saveMessage(
-    data.roomId,
-    user.id || user.sub,
-    data.text,
-    user.name
-  );
+  private getSocketUser(client: AuthenticatedSocket) {
+    const user = client.data.user;
+    if (!user) {
+      throw new UnauthorizedException();
+    }
 
-  this.server
-    .to(data.roomId)
-    .emit("chat:message", savedMessage);
-}
+    return user;
+  }
 
+  private getSocketUserId(client: AuthenticatedSocket) {
+    return client.data.user?.id || client.data.user?.sub;
+  }
 
+  private getRequiredSocketUserId(client: AuthenticatedSocket) {
+    const userId = this.getSocketUserId(client);
+    if (!userId) {
+      throw new UnauthorizedException('Socket user is missing an id');
+    }
+
+    return userId;
+  }
 }

@@ -228,11 +228,15 @@ export class CommunityService {
     }
 
     if (cleanTitle.length > 140) {
-      throw new BadRequestException('Post title must be 140 characters or fewer');
+      throw new BadRequestException(
+        'Post title must be 140 characters or fewer',
+      );
     }
 
     if (cleanContent.length > 5000) {
-      throw new BadRequestException('Post content must be 5000 characters or fewer');
+      throw new BadRequestException(
+        'Post content must be 5000 characters or fewer',
+      );
     }
 
     const createdPost = await this.prisma.communityPost.create({
@@ -259,7 +263,9 @@ export class CommunityService {
     }
 
     if (cleanContent.length > 3000) {
-      throw new BadRequestException('Reply content must be 3000 characters or fewer');
+      throw new BadRequestException(
+        'Reply content must be 3000 characters or fewer',
+      );
     }
 
     const postExists = await this.prisma.communityPost.findUnique({
@@ -322,11 +328,15 @@ export class CommunityService {
     }
 
     if (cleanTitle.length > 140) {
-      throw new BadRequestException('Post title must be 140 characters or fewer');
+      throw new BadRequestException(
+        'Post title must be 140 characters or fewer',
+      );
     }
 
     if (cleanContent.length > 5000) {
-      throw new BadRequestException('Post content must be 5000 characters or fewer');
+      throw new BadRequestException(
+        'Post content must be 5000 characters or fewer',
+      );
     }
 
     const existingPost = await this.prisma.communityPost.findUnique({

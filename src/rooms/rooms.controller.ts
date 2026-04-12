@@ -11,14 +11,14 @@ import {
 import { RoomsService } from './rooms.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { Delete, Param } from '@nestjs/common';
-
+import type { RequestWithUser } from '../auth/auth-user.interface';
 
 @Controller('rooms')
 @UseGuards(JwtAuthGuard)
 export class RoomsController {
-  constructor(private roomsService: RoomsService) { }
+  constructor(private roomsService: RoomsService) {}
 
-  private getUserId(req: any) {
+  private getUserId(req: RequestWithUser) {
     const userId = req?.user?.id || req?.user?.sub;
     if (!userId) {
       throw new UnauthorizedException('Invalid user token');
@@ -33,7 +33,7 @@ export class RoomsController {
     @Body('description') description: string,
     @Body('tags') tags: string[],
     @Body('visibility') visibility: 'PUBLIC' | 'PRIVATE',
-    @Req() req: any,
+    @Req() req: RequestWithUser,
     @Body('startTime') startTime?: string,
     @Body('durationMinutes') durationMinutes?: number,
     @Body('isRecurring') isRecurring?: boolean,
@@ -69,31 +69,27 @@ export class RoomsController {
     return this.roomsService.getPublicRooms();
   }
 
-
   @Get('my')
-  getMyRooms(@Req() req: any) {
+  getMyRooms(@Req() req: RequestWithUser) {
     return this.roomsService.getMyRooms(this.getUserId(req));
   }
 
   @Post('join')
-  joinRoom(@Body('roomId') roomId: string, @Req() req: any) {
+  joinRoom(@Body('roomId') roomId: string, @Req() req: RequestWithUser) {
     return this.roomsService.joinRoom(roomId, this.getUserId(req));
   }
 
   @Get('search')
   searchRoomsByTags(@Query('tags') tags: string) {
     const tagArray = tags
-      ? tags.split(',').map(t => t.trim().toLowerCase())
+      ? tags.split(',').map((t) => t.trim().toLowerCase())
       : [];
 
     return this.roomsService.searchRoomsByTags(tagArray);
   }
 
   @Delete(':roomId')
-  deleteRoom(
-    @Param('roomId') roomId: string,
-    @Req() req: any
-  ) {
+  deleteRoom(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
     return this.roomsService.deleteRoom(roomId, this.getUserId(req));
   }
 

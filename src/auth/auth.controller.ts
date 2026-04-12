@@ -10,6 +10,7 @@ import {
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { OAuth2Client } from 'google-auth-library';
+import type { RequestWithUser } from './auth-user.interface';
 
 @Controller('auth')
 export class AuthController {
@@ -93,10 +94,9 @@ export class AuthController {
   // ========================
   // CURRENT USER
   // =========================
-  @Get("me")
+  @Get('me')
   @UseGuards(JwtAuthGuard)
-  me(@Req() req: any) {
-    return this.auth.me(req.user.sub);
+  me(@Req() req: RequestWithUser) {
+    return this.auth.me(req.user?.sub || req.user?.id || '');
   }
-
 }
