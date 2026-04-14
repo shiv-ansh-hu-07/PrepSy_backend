@@ -10,6 +10,7 @@ describe('AuthService', () => {
     user: {
       findUnique: jest.Mock;
       findFirst: jest.Mock;
+      create: jest.Mock;
       update: jest.Mock;
     };
   };
@@ -25,6 +26,7 @@ describe('AuthService', () => {
       user: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
+        create: jest.fn(),
         update: jest.fn(),
       },
     };
@@ -54,12 +56,13 @@ describe('AuthService', () => {
   });
 
   it('registers a local user when streakDisabled is missing from the schema', async () => {
-    prisma.$queryRaw
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { id: 'user-1', email: 'test@prepsy.in', name: 'Test User' },
-      ]);
+    prisma.$queryRaw.mockResolvedValueOnce([]);
     prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 'user-1',
+      email: 'test@prepsy.in',
+      name: 'Test User',
+    });
 
     const result = await service.register(
       'test@prepsy.in',
@@ -80,7 +83,8 @@ describe('AuthService', () => {
         lastLoginAt: true,
       },
     });
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.user.create).toHaveBeenCalled();
     expect(result).toEqual({
       message: 'User registered successfully',
       user: {
@@ -92,19 +96,18 @@ describe('AuthService', () => {
   });
 
   it('creates and logs in an oauth user on the legacy schema path', async () => {
-    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      {
-        id: 'oauth-1',
-        email: 'google@prepsy.in',
-        name: 'Google User',
-        password: null,
-        provider: 'google',
-        providerId: 'google-sub',
-        loginStreak: 0,
-        lastLoginAt: null,
-      },
-    ]);
+    prisma.$queryRaw.mockResolvedValueOnce([]);
     prisma.user.findFirst.mockResolvedValue(null);
+    prisma.user.create.mockResolvedValue({
+      id: 'oauth-1',
+      email: 'google@prepsy.in',
+      name: 'Google User',
+      password: null,
+      provider: 'google',
+      providerId: 'google-sub',
+      loginStreak: 0,
+      lastLoginAt: null,
+    });
     prisma.user.update.mockResolvedValue({
       id: 'oauth-1',
       email: 'google@prepsy.in',
