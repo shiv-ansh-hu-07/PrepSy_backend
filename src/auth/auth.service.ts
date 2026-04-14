@@ -61,253 +61,112 @@ export class AuthService {
     return shifted.toISOString().slice(0, 10);
   }
 
-  private async hasStreakDisabledColumn() {
-    if (this.streakDisabledColumnAvailable !== null) {
-      return this.streakDisabledColumnAvailable;
-    }
-
-    const rows = await this.prisma.$queryRaw<{ exists: string | null }[]>(
-      Prisma.sql`
-        SELECT 1 AS "exists"
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'User'
-          AND column_name = 'streakDisabled'
-        LIMIT 1
-      `,
-    );
-
-    this.streakDisabledColumnAvailable = rows.length > 0;
-    return this.streakDisabledColumnAvailable;
-  }
 
   private async findUserByEmail(email: string): Promise<AuthUserRecord | null> {
-    const canReadStreakDisabled = await this.hasStreakDisabledColumn();
-
-    if (canReadStreakDisabled) {
-      return this.prisma.user.findUnique({ where: { email } });
-    }
-
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      select: authUserBaseSelect,
-    });
-
-    return user ? { ...user, streakDisabled: false } : null;
+    return this.prisma.user.findUnique({ where: { email } });
   }
 
   private async findUserById(userId: string): Promise<AuthUserRecord | null> {
-    const canReadStreakDisabled = await this.hasStreakDisabledColumn();
-
-    if (canReadStreakDisabled) {
-      return this.prisma.user.findUnique({ where: { id: userId } });
-    }
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: authUserBaseSelect,
-    });
-
-    return user ? { ...user, streakDisabled: false } : null;
-  }
+  return this.prisma.user.findUnique({ where: { id: userId } });
+}
 
   private async findOauthUser(
-    provider: 'google',
-    profile: { email: string; providerId: string; name?: string },
-  ): Promise<AuthUserRecord | null> {
-    const canReadStreakDisabled = await this.hasStreakDisabledColumn();
+  provider: 'google',
+  profile: { email: string; providerId: string; name?: string },
+): Promise<AuthUserRecord | null> {
+  return this.prisma.user.findFirst({
+    where: {
+      OR: [
+        { provider, providerId: profile.providerId },
+        { email: profile.email },
+      ],
+    },
+  });
+}
 
-    if (canReadStreakDisabled) {
-      return this.prisma.user.findFirst({
-        where: {
-          OR: [
-            { provider, providerId: profile.providerId },
-            { email: profile.email },
-          ],
-        },
-      });
-    }
-
-    const user = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { provider, providerId: profile.providerId },
-          { email: profile.email },
-        ],
-      },
-      select: authUserBaseSelect,
-    });
-
-    return user ? { ...user, streakDisabled: false } : null;
+private async recordDailyLogin(
+  user: AuthUserRecord,
+): Promise<AuthUserRecord> {
+  if (user.streakDisabled) {
+    return user;
   }
 
-  private getCurrentLoginStreak(
-    user: Pick<
-      AuthUserRecord,
-      'loginStreak' | 'lastLoginAt' | 'streakDisabled'
-    >,
-  ) {
-    if (user.streakDisabled) {
-      return 0;
-    }
+  const now = new Date();
+  const todayKey = this.getDateKeyInTimeZone(now);
+  const lastLoginKey = user.lastLoginAt
+    ? this.getDateKeyInTimeZone(user.lastLoginAt)
+    : null;
 
-    if (!user.lastLoginAt) {
-      return 0;
-    }
-
-    const todayKey = this.getDateKeyInTimeZone(new Date());
-    const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt);
-
-    if (lastLoginKey !== todayKey) {
-      return 0;
-    }
-
-    return user.loginStreak;
+  if (lastLoginKey === todayKey) {
+    return user;
   }
 
-  private async recordDailyLogin(
-    user: AuthUserRecord,
-  ): Promise<AuthUserRecord> {
-    if (user.streakDisabled) {
-      return user;
-    }
+  const yesterdayKey = this.shiftDateKey(todayKey, -1);
+  const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
 
-    const now = new Date();
-    const todayKey = this.getDateKeyInTimeZone(now);
-    const lastLoginKey = user.lastLoginAt
-      ? this.getDateKeyInTimeZone(user.lastLoginAt)
-      : null;
+  return this.prisma.user.update({
+    where: { id: user.id },
+    data: {
+      loginStreak: nextStreak,
+      lastLoginAt: now,
+    },
+  });
+}
 
-    if (lastLoginKey === todayKey) {
-      return user;
-    }
-
-    const yesterdayKey = this.shiftDateKey(todayKey, -1);
-    const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
-
-    const canReadStreakDisabled = await this.hasStreakDisabledColumn();
-
-    if (canReadStreakDisabled) {
-      return this.prisma.user.update({
-        where: { id: user.id },
-        data: {
-          loginStreak: nextStreak,
-          lastLoginAt: now,
-        },
-      });
-    }
-
-    const updatedUser = await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        loginStreak: nextStreak,
-        lastLoginAt: now,
-      },
-      select: authUserBaseSelect,
-    });
-
-    return {
-      ...updatedUser,
-      streakDisabled: false,
-    };
+private async applyGuestStreakDisable(
+  user: AuthUserRecord,
+  disableStreak?: boolean,
+) {
+  if (!disableStreak || user.streakDisabled) {
+    return user;
   }
 
-  private async applyGuestStreakDisable(
-    user: AuthUserRecord,
-    disableStreak?: boolean,
-  ) {
-    if (
-      !disableStreak ||
-      user.streakDisabled ||
-      !(await this.hasStreakDisabledColumn())
-    ) {
-      return user;
-    }
+  return this.prisma.user.update({
+    where: { id: user.id },
+    data: {
+      streakDisabled: true,
+      loginStreak: 0,
+      lastLoginAt: null,
+    },
+  });
+}
 
-    return this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        streakDisabled: true,
-        loginStreak: 0,
-        lastLoginAt: null,
-      },
-    });
-  }
+private async createLocalUser(
+  email: string,
+  hashedPassword: string,
+  name?: string,
+) {
+  return this.prisma.user.create({
+    data: {
+      email,
+      password: hashedPassword,
+      name: name ?? '',
+      provider: 'local',
+    },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+    },
+  });
+}
 
-  private async createLocalUser(
-    email: string,
-    hashedPassword: string,
-    name?: string,
-  ) {
-    const canWriteStreakDisabled = await this.hasStreakDisabledColumn();
-
-    if (canWriteStreakDisabled) {
-      return this.prisma.user.create({
-        data: {
-          email,
-          password: hashedPassword,
-          name: name ?? '',
-          provider: 'local',
-        },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-        },
-      });
-    }
-
-    return this.prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        name: name ?? '',
-        provider: 'local',
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-      },
-    });
-  }
-
-  private async createOauthUser(
-    provider: 'google',
-    profile: { email: string; providerId: string; name?: string },
-    disableStreak = false,
-  ): Promise<AuthUserRecord> {
-    const canWriteStreakDisabled = await this.hasStreakDisabledColumn();
-
-    if (canWriteStreakDisabled) {
-      return this.prisma.user.create({
-        data: {
-          email: profile.email,
-          name: profile.name ?? '',
-          provider,
-          providerId: profile.providerId,
-          password: null,
-          streakDisabled: disableStreak,
-        },
-      });
-    }
-
-    const user = await this.prisma.user.create({
-      data: {
-        email: profile.email,
-        name: profile.name ?? '',
-        provider,
-        providerId: profile.providerId,
-        password: null,
-      },
-      select: authUserBaseSelect,
-    });
-
-    return {
-      ...user,
-      streakDisabled: false,
-    };
-  }
+private async createOauthUser(
+  provider: 'google',
+  profile: { email: string; providerId: string; name?: string },
+  disableStreak = false,
+): Promise<AuthUserRecord> {
+  return this.prisma.user.create({
+    data: {
+      email: profile.email,
+      name: profile.name ?? '',
+      provider,
+      providerId: profile.providerId,
+      password: null,
+      streakDisabled: disableStreak,
+    },
+  });
+}
 
   // =========================
   // HELPER: SIGN JWT (STANDARD)
@@ -367,6 +226,31 @@ export class AuthService {
       },
     };
   }
+
+  private getCurrentLoginStreak(
+  user: {
+    loginStreak: number;
+    lastLoginAt: Date | null;
+    streakDisabled: boolean;
+  },
+) {
+  if (user.streakDisabled) {
+    return 0;
+  }
+
+  if (!user.lastLoginAt) {
+    return 0;
+  }
+
+  const todayKey = this.getDateKeyInTimeZone(new Date());
+  const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt);
+
+  if (lastLoginKey !== todayKey) {
+    return 0;
+  }
+
+  return user.loginStreak;
+}
 
   // =========================
   // CURRENT USER
