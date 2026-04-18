@@ -170,6 +170,18 @@ export class RoomsService {
     return `${parts.year}-${month}-${day}`;
   }
 
+  private formatMinutes(minutes: number) {
+    if (minutes < 60) {
+      return `${minutes}m`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes === 0
+      ? `${hours}h`
+      : `${hours}h ${remainingMinutes}m`;
+  }
+
   private zonedTimeToUtc(
     year: number,
     month: number,
@@ -600,6 +612,115 @@ export class RoomsService {
     }
 
     return { success: true };
+  }
+
+  async leaveRoom(roomId: string, userId: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      select: {
+        roomId: true,
+        name: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    const now = new Date();
+    const { start, end } = this.getAttendanceWindow(now);
+    const currentAttendance = await this.prisma.roomAttendance.findFirst({
+      where: {
+        roomId,
+        userId,
+        joinedAt: {
+          gte: start,
+          lt: end,
+        },
+      },
+      orderBy: {
+        joinedAt: 'desc',
+      },
+    });
+
+    if (currentAttendance && !currentAttendance.leftAt) {
+      await this.prisma.roomAttendance.update({
+        where: { id: currentAttendance.id },
+        data: { leftAt: now },
+      });
+    }
+
+    const [allUserAttendance, companionAttendance, user] = await Promise.all([
+      this.prisma.roomAttendance.findMany({
+        where: {
+          roomId,
+          userId,
+        },
+        select: {
+          joinedAt: true,
+          leftAt: true,
+        },
+      }),
+      this.prisma.roomAttendance.findMany({
+        where: {
+          roomId,
+          userId: {
+            not: userId,
+          },
+        },
+        distinct: ['userId'],
+        select: {
+          userId: true,
+        },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          loginStreak: true,
+          lastLoginAt: true,
+          streakDisabled: true,
+        },
+      }),
+    ]);
+
+    const totalMinutes = Math.round(
+      allUserAttendance.reduce((total, attendance) => {
+        const leftAt = attendance.leftAt ?? now;
+        return total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime());
+      }, 0) / 60000,
+    );
+    const streak = user ? this.getCurrentStreak(user, now) : 0;
+
+    return {
+      roomId: room.roomId,
+      roomName: room.name,
+      totalMinutes,
+      totalTimeLabel: this.formatMinutes(totalMinutes),
+      studiedWithCount: companionAttendance.length,
+      streak,
+      streakDisabled: user?.streakDisabled ?? false,
+      message:
+        'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
+    };
+  }
+
+  private getCurrentStreak(
+    user: {
+      loginStreak: number;
+      lastLoginAt: Date | null;
+      streakDisabled: boolean;
+    },
+    now: Date,
+  ) {
+    if (user.streakDisabled || !user.lastLoginAt) {
+      return 0;
+    }
+
+    const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
+    const todayKey = this.getDateKeyInTimeZone(now, timeZone);
+    const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt, timeZone);
+
+    return lastLoginKey === todayKey ? user.loginStreak : 0;
   }
 
   async deleteRoom(roomId: string, userId: string) {

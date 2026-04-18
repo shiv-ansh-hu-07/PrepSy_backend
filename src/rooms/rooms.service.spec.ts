@@ -10,6 +10,9 @@ describe('RoomsService', () => {
       findUnique: jest.Mock;
       delete: jest.Mock;
     };
+    user: {
+      findUnique: jest.Mock;
+    };
     roomMember: {
       deleteMany: jest.Mock;
     };
@@ -20,6 +23,9 @@ describe('RoomsService', () => {
       deleteMany: jest.Mock;
     };
     roomAttendance: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
       deleteMany: jest.Mock;
     };
     $transaction: jest.Mock;
@@ -31,6 +37,9 @@ describe('RoomsService', () => {
         findUnique: jest.fn(),
         delete: jest.fn(),
       },
+      user: {
+        findUnique: jest.fn(),
+      },
       roomMember: {
         deleteMany: jest.fn(),
       },
@@ -41,6 +50,9 @@ describe('RoomsService', () => {
         deleteMany: jest.fn(),
       },
       roomAttendance: {
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
         deleteMany: jest.fn(),
       },
       $transaction: jest.fn(),
@@ -93,5 +105,53 @@ describe('RoomsService', () => {
       'delete attendance',
       'delete room',
     ]);
+  });
+
+  it('records leave time and returns room session analytics', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-10T10:00:00.000Z'));
+
+    prisma.room.findUnique.mockResolvedValue({
+      roomId: 'focus-room',
+      name: 'Focus Room',
+    });
+    prisma.roomAttendance.findFirst.mockResolvedValue({
+      id: 'attendance-1',
+      roomId: 'focus-room',
+      userId: 'user-1',
+      joinedAt: new Date('2026-04-10T09:00:00.000Z'),
+      leftAt: null,
+    });
+    prisma.roomAttendance.update.mockResolvedValue({});
+    prisma.roomAttendance.findMany
+      .mockResolvedValueOnce([
+        {
+          joinedAt: new Date('2026-04-10T09:00:00.000Z'),
+          leftAt: null,
+        },
+      ])
+      .mockResolvedValueOnce([{ userId: 'user-2' }, { userId: 'user-3' }]);
+    prisma.user.findUnique.mockResolvedValue({
+      loginStreak: 4,
+      lastLoginAt: new Date('2026-04-10T08:30:00.000Z'),
+      streakDisabled: false,
+    });
+
+    await expect(service.leaveRoom('focus-room', 'user-1')).resolves.toEqual({
+      roomId: 'focus-room',
+      roomName: 'Focus Room',
+      totalMinutes: 60,
+      totalTimeLabel: '1h',
+      studiedWithCount: 2,
+      streak: 4,
+      streakDisabled: false,
+      message:
+        'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
+    });
+    expect(prisma.roomAttendance.update).toHaveBeenCalledWith({
+      where: { id: 'attendance-1' },
+      data: { leftAt: new Date('2026-04-10T10:00:00.000Z') },
+    });
+
+    jest.useRealTimers();
   });
 });

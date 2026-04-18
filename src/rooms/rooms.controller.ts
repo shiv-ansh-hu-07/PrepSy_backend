@@ -79,6 +79,11 @@ export class RoomsController {
     return this.roomsService.joinRoom(roomId, this.getUserId(req));
   }
 
+  @Post(':roomId/leave')
+  leaveRoom(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.roomsService.leaveRoom(roomId, this.getUserId(req));
+  }
+
   @Get('search')
   searchRoomsByTags(@Query('tags') tags: string) {
     const tagArray = tags
