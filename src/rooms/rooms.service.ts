@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomWithRelations } from './room.types';
 import { EmailService } from '../email/email.service';
@@ -31,11 +32,6 @@ export class RoomsService {
     isRecurring: true,
     recurrenceType: true,
     recurrenceEndDate: true,
-    _count: {
-      select: {
-        members: true,
-      },
-    },
   } as const;
 
   constructor(
@@ -331,6 +327,56 @@ export class RoomsService {
     return new Date() <= endTime;
   }
 
+  private getLiveKitHost() {
+    const wsUrl = process.env.LIVEKIT_WS_URL;
+    if (!wsUrl) return null;
+
+    if (wsUrl.startsWith('wss://')) {
+      return wsUrl.replace('wss://', 'https://');
+    }
+
+    if (wsUrl.startsWith('ws://')) {
+      return wsUrl.replace('ws://', 'http://');
+    }
+
+    return wsUrl;
+  }
+
+  private getRoomServiceClient() {
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const host = this.getLiveKitHost();
+
+    if (!apiKey || !apiSecret || !host) {
+      return null;
+    }
+
+    return new RoomServiceClient(host, apiKey, apiSecret);
+  }
+
+  private async attachActiveUserCounts<
+    T extends {
+      roomId: string;
+    },
+  >(rooms: T[]) {
+    const roomService = this.getRoomServiceClient();
+
+    if (!roomService || rooms.length === 0) {
+      return rooms.map((room) => ({ ...room, activeUsers: 0 }));
+    }
+
+    return Promise.all(
+      rooms.map(async (room) => {
+        try {
+          const participants = await roomService.listParticipants(room.roomId);
+          return { ...room, activeUsers: participants.length };
+        } catch {
+          return { ...room, activeUsers: 0 };
+        }
+      }),
+    );
+  }
+
   async createRoom(
     name: string,
     roomId: string,
@@ -464,7 +510,9 @@ export class RoomsService {
     });
 
     return {
-      rooms: rooms.filter((room) => this.shouldShowPublicRoom(room)),
+      rooms: await this.attachActiveUserCounts(
+        rooms.filter((room) => this.shouldShowPublicRoom(room)),
+      ),
     };
   }
 
@@ -482,7 +530,7 @@ export class RoomsService {
       select: this.roomListSelect,
     });
 
-    return { rooms };
+    return { rooms: await this.attachActiveUserCounts(rooms) };
   }
 
   async getMyRooms(userId: string) {
@@ -509,8 +557,8 @@ export class RoomsService {
     const joinedRooms = rooms.filter((room) => room.ownerId !== userId);
 
     return {
-      createdRooms,
-      joinedRooms,
+      createdRooms: await this.attachActiveUserCounts(createdRooms),
+      joinedRooms: await this.attachActiveUserCounts(joinedRooms),
     };
   }
 

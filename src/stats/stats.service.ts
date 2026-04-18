@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { RoomServiceClient } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 
 type RoomStatsRecord = {
@@ -20,7 +21,7 @@ export class StatsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getStats() {
-    const [rooms, todayAttendance, roomPomodoros] = await Promise.all([
+    const [rooms, todayAttendance] = await Promise.all([
       this.prisma.room.findMany({
         where: {
           visibility: 'PUBLIC',
@@ -41,14 +42,10 @@ export class StatsService {
           joinedAt: this.getTodayAttendanceRange(),
         },
         select: {
-          userId: true,
-        },
-      }),
-      this.prisma.pomodoro.findMany({
-        select: {
           roomId: true,
-          running: true,
-          mode: true,
+          userId: true,
+          joinedAt: true,
+          leftAt: true,
         },
       }),
     ]);
@@ -56,29 +53,126 @@ export class StatsService {
     const visibleRooms = rooms.filter((room) =>
       this.shouldShowPublicRoom(room),
     );
-    const activeRooms = visibleRooms.filter((room) => this.isRoomActive(room));
-    const activeRoomIds = new Set(activeRooms.map((room) => room.roomId));
-    const workPomodoros = roomPomodoros.filter(
-      (pomodoro) =>
-        pomodoro.running &&
-        pomodoro.mode === 'work' &&
-        activeRoomIds.has(pomodoro.roomId),
+    const scheduledActiveRooms = visibleRooms.filter((room) =>
+      this.isRoomActive(room),
     );
+    const liveRoomStats =
+      await this.getLiveKitRoomStats(scheduledActiveRooms);
 
-    const activeUsers = new Set(todayAttendance.map((entry) => entry.userId))
-      .size;
-    const avgFocus =
-      activeRooms.length === 0
+    const activeUsers =
+      liveRoomStats === null
+        ? new Set(todayAttendance.map((entry) => entry.userId)).size
+        : liveRoomStats.activeUsers;
+    const focusDurations =
+      liveRoomStats === null
+        ? this.getAttendanceDurations(todayAttendance)
+        : liveRoomStats.focusDurations;
+    const avgFocusMinutes =
+      focusDurations.length === 0
         ? 0
-        : Math.round((workPomodoros.length / activeRooms.length) * 100);
+        : Math.round(
+            focusDurations.reduce((total, duration) => total + duration, 0) /
+              focusDurations.length /
+              60000,
+          );
 
     return {
       stats: {
-        activeRooms: activeRooms.length,
+        activeRooms:
+          liveRoomStats === null
+            ? scheduledActiveRooms.length
+            : liveRoomStats.activeRooms,
         activeUsers,
-        avgFocus,
+        avgFocus: avgFocusMinutes,
+        avgFocusLabel: this.formatMinutes(avgFocusMinutes),
       },
     };
+  }
+
+  private getLiveKitHost() {
+    const wsUrl = process.env.LIVEKIT_WS_URL;
+    if (!wsUrl) return null;
+
+    if (wsUrl.startsWith('wss://')) {
+      return wsUrl.replace('wss://', 'https://');
+    }
+
+    if (wsUrl.startsWith('ws://')) {
+      return wsUrl.replace('ws://', 'http://');
+    }
+
+    return wsUrl;
+  }
+
+  private getRoomServiceClient() {
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const host = this.getLiveKitHost();
+
+    if (!apiKey || !apiSecret || !host) {
+      return null;
+    }
+
+    return new RoomServiceClient(host, apiKey, apiSecret);
+  }
+
+  private async getLiveKitRoomStats(rooms: RoomStatsRecord[]) {
+    const roomService = this.getRoomServiceClient();
+
+    if (!roomService) {
+      return null;
+    }
+
+    const now = Date.now();
+    const roomResults = await Promise.all(
+      rooms.map(async (room) => {
+        try {
+          const participants = await roomService.listParticipants(room.roomId);
+          return participants.map((participant) => {
+            const joinedAtMs =
+              Number(participant.joinedAtMs || 0n) ||
+              Number(participant.joinedAt || 0n) * 1000;
+            return joinedAtMs > 0 ? now - joinedAtMs : 0;
+          });
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const activeRoomDurations = roomResults.filter(
+      (durations) => durations.length > 0,
+    );
+    const focusDurations = activeRoomDurations.flat().filter((duration) => duration > 0);
+
+    return {
+      activeRooms: activeRoomDurations.length,
+      activeUsers: activeRoomDurations.reduce(
+        (total, durations) => total + durations.length,
+        0,
+      ),
+      focusDurations,
+    };
+  }
+
+  private getAttendanceDurations(
+    attendance: { joinedAt: Date; leftAt: Date | null }[],
+  ) {
+    const now = Date.now();
+    return attendance
+      .map((entry) => (entry.leftAt?.getTime() ?? now) - entry.joinedAt.getTime())
+      .filter((duration) => duration > 0);
+  }
+
+  private formatMinutes(minutes: number) {
+    if (minutes < 60) {
+      return `${minutes}m`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return remainingMinutes === 0
+      ? `${hours}h`
+      : `${hours}h ${remainingMinutes}m`;
   }
 
   private getTodayAttendanceRange() {
