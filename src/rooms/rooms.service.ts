@@ -562,21 +562,23 @@ export class RoomsService {
       throw new ForbiddenException('You are not allowed to delete this room');
     }
 
-    await this.prisma.roomMember.deleteMany({
-      where: { roomId },
-    });
-
-    await this.prisma.message.deleteMany({
-      where: { roomId },
-    });
-
-    await this.prisma.pomodoro.deleteMany({
-      where: { roomId },
-    });
-
-    await this.prisma.room.delete({
-      where: { roomId },
-    });
+    await this.prisma.$transaction([
+      this.prisma.roomMember.deleteMany({
+        where: { roomId },
+      }),
+      this.prisma.message.deleteMany({
+        where: { roomId },
+      }),
+      this.prisma.pomodoro.deleteMany({
+        where: { roomId },
+      }),
+      this.prisma.roomAttendance.deleteMany({
+        where: { roomId },
+      }),
+      this.prisma.room.delete({
+        where: { roomId },
+      }),
+    ]);
 
     return { success: true };
   }
