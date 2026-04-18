@@ -31,6 +31,11 @@ export class RoomsService {
     isRecurring: true,
     recurrenceType: true,
     recurrenceEndDate: true,
+    _count: {
+      select: {
+        members: true,
+      },
+    },
   } as const;
 
   constructor(
