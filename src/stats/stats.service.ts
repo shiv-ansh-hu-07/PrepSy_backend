@@ -21,34 +21,48 @@ export class StatsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getStats() {
-    const [rooms, todayAttendance] = await Promise.all([
-      this.prisma.room.findMany({
-        where: {
-          visibility: 'PUBLIC',
-          startTime: { not: null },
-          durationMinutes: { not: null },
-        },
-        select: {
-          roomId: true,
-          startTime: true,
-          durationMinutes: true,
-          isRecurring: true,
-          recurrenceType: true,
-          recurrenceEndDate: true,
-        },
-      }),
-      this.prisma.roomAttendance.findMany({
-        where: {
-          joinedAt: this.getTodayAttendanceRange(),
-        },
-        select: {
-          roomId: true,
-          userId: true,
-          joinedAt: true,
-          leftAt: true,
-        },
-      }),
-    ]);
+    const [rooms, todayAttendance, historicalRooms, historicalAttendance] =
+      await Promise.all([
+        this.prisma.room.findMany({
+          where: {
+            visibility: 'PUBLIC',
+            startTime: { not: null },
+            durationMinutes: { not: null },
+          },
+          select: {
+            roomId: true,
+            startTime: true,
+            durationMinutes: true,
+            isRecurring: true,
+            recurrenceType: true,
+            recurrenceEndDate: true,
+          },
+        }),
+        this.prisma.roomAttendance.findMany({
+          where: {
+            joinedAt: this.getTodayAttendanceRange(),
+          },
+          select: {
+            roomId: true,
+            userId: true,
+          },
+        }),
+        this.prisma.room.findMany({
+          where: {
+            durationMinutes: { not: null },
+          },
+          select: {
+            roomId: true,
+            durationMinutes: true,
+          },
+        }),
+        this.prisma.roomAttendance.findMany({
+          distinct: ['roomId'],
+          select: {
+            roomId: true,
+          },
+        }),
+      ]);
 
     const visibleRooms = rooms.filter((room) =>
       this.shouldShowPublicRoom(room),
@@ -63,18 +77,10 @@ export class StatsService {
       liveRoomStats === null
         ? new Set(todayAttendance.map((entry) => entry.userId)).size
         : liveRoomStats.activeUsers;
-    const focusDurations =
-      liveRoomStats === null
-        ? this.getAttendanceDurations(todayAttendance)
-        : liveRoomStats.focusDurations;
-    const avgFocusMinutes =
-      focusDurations.length === 0
-        ? 0
-        : Math.round(
-            focusDurations.reduce((total, duration) => total + duration, 0) /
-              focusDurations.length /
-              60000,
-          );
+    const avgFocusMinutes = this.getHistoricalAverageRoomMinutes(
+      historicalRooms,
+      historicalAttendance,
+    );
 
     return {
       stats: {
@@ -123,44 +129,51 @@ export class StatsService {
       return null;
     }
 
-    const now = Date.now();
-    const roomResults = await Promise.all(
+    const roomParticipantCounts = await Promise.all(
       rooms.map(async (room) => {
         try {
           const participants = await roomService.listParticipants(room.roomId);
-          return participants.map((participant) => {
-            const joinedAtMs =
-              Number(participant.joinedAtMs || 0n) ||
-              Number(participant.joinedAt || 0n) * 1000;
-            return joinedAtMs > 0 ? now - joinedAtMs : 0;
-          });
+          return participants.length;
         } catch {
-          return [];
+          return 0;
         }
       }),
     );
-    const activeRoomDurations = roomResults.filter(
-      (durations) => durations.length > 0,
+    const activeRoomParticipantCounts = roomParticipantCounts.filter(
+      (count) => count > 0,
     );
-    const focusDurations = activeRoomDurations.flat().filter((duration) => duration > 0);
 
     return {
-      activeRooms: activeRoomDurations.length,
-      activeUsers: activeRoomDurations.reduce(
-        (total, durations) => total + durations.length,
+      activeRooms: activeRoomParticipantCounts.length,
+      activeUsers: activeRoomParticipantCounts.reduce(
+        (total, count) => total + count,
         0,
       ),
-      focusDurations,
     };
   }
 
-  private getAttendanceDurations(
-    attendance: { joinedAt: Date; leftAt: Date | null }[],
+  private getHistoricalAverageRoomMinutes(
+    rooms: { roomId: string; durationMinutes: number | null }[],
+    attendance: { roomId: string }[],
   ) {
-    const now = Date.now();
-    return attendance
-      .map((entry) => (entry.leftAt?.getTime() ?? now) - entry.joinedAt.getTime())
-      .filter((duration) => duration > 0);
+    const usedRoomIds = new Set(attendance.map((entry) => entry.roomId));
+    const usedDurations = rooms
+      .filter(
+        (room) =>
+          usedRoomIds.has(room.roomId) &&
+          typeof room.durationMinutes === 'number' &&
+          room.durationMinutes > 0,
+      )
+      .map((room) => room.durationMinutes as number);
+
+    if (usedDurations.length === 0) {
+      return 0;
+    }
+
+    return Math.round(
+      usedDurations.reduce((total, duration) => total + duration, 0) /
+        usedDurations.length,
+    );
   }
 
   private formatMinutes(minutes: number) {

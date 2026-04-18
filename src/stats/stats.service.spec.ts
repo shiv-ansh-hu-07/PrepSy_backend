@@ -59,8 +59,8 @@ describe('StatsService', () => {
     jest.useRealTimers();
   });
 
-  it('returns real aggregated stats from rooms and attendance timing', async () => {
-    prisma.room.findMany.mockResolvedValue([
+  it('returns real aggregated stats with historical average room timing', async () => {
+    prisma.room.findMany.mockResolvedValueOnce([
       {
         roomId: 'live-room',
         startTime: new Date('2026-04-10T09:30:00.000Z'),
@@ -78,25 +78,28 @@ describe('StatsService', () => {
         recurrenceEndDate: null,
       },
     ]);
-    prisma.roomAttendance.findMany.mockResolvedValue([
+    prisma.roomAttendance.findMany.mockResolvedValueOnce([
       {
         roomId: 'live-room',
         userId: 'user-1',
-        joinedAt: new Date('2026-04-10T09:30:00.000Z'),
-        leftAt: null,
       },
       {
         roomId: 'live-room',
         userId: 'user-2',
-        joinedAt: new Date('2026-04-10T09:00:00.000Z'),
-        leftAt: null,
       },
       {
         roomId: 'live-room',
         userId: 'user-1',
-        joinedAt: new Date('2026-04-10T09:45:00.000Z'),
-        leftAt: new Date('2026-04-10T10:00:00.000Z'),
       },
+    ]);
+    prisma.room.findMany.mockResolvedValueOnce([
+      { roomId: 'past-room-1', durationMinutes: 120 },
+      { roomId: 'past-room-2', durationMinutes: 150 },
+      { roomId: 'unused-room', durationMinutes: 60 },
+    ]);
+    prisma.roomAttendance.findMany.mockResolvedValueOnce([
+      { roomId: 'past-room-1' },
+      { roomId: 'past-room-2' },
     ]);
 
     const result = await service.getStats();
@@ -105,8 +108,8 @@ describe('StatsService', () => {
       stats: {
         activeRooms: 1,
         activeUsers: 2,
-        avgFocus: 35,
-        avgFocusLabel: '35m',
+        avgFocus: 135,
+        avgFocusLabel: '2h 15m',
       },
     });
   });
