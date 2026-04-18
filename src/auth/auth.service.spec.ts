@@ -55,8 +55,7 @@ describe('AuthService', () => {
     jest.useRealTimers();
   });
 
-  it('registers a local user when streakDisabled is missing from the schema', async () => {
-    prisma.$queryRaw.mockResolvedValueOnce([]);
+  it('registers a local user without touching streak state', async () => {
     prisma.user.findUnique.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 'user-1',
@@ -72,18 +71,7 @@ describe('AuthService', () => {
 
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { email: 'test@prepsy.in' },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: true,
-        provider: true,
-        providerId: true,
-        loginStreak: true,
-        lastLoginAt: true,
-      },
     });
-    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.user.create).toHaveBeenCalled();
     expect(result).toEqual({
       message: 'User registered successfully',
@@ -95,8 +83,7 @@ describe('AuthService', () => {
     });
   });
 
-  it('creates and logs in an oauth user on the legacy schema path', async () => {
-    prisma.$queryRaw.mockResolvedValueOnce([]);
+  it('creates and logs in an oauth user without incrementing session streak', async () => {
     prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 'oauth-1',
@@ -107,16 +94,7 @@ describe('AuthService', () => {
       providerId: 'google-sub',
       loginStreak: 0,
       lastLoginAt: null,
-    });
-    prisma.user.update.mockResolvedValue({
-      id: 'oauth-1',
-      email: 'google@prepsy.in',
-      name: 'Google User',
-      password: null,
-      provider: 'google',
-      providerId: 'google-sub',
-      loginStreak: 1,
-      lastLoginAt: new Date('2026-04-10T10:00:00.000Z'),
+      streakDisabled: false,
     });
 
     const result = await service.oauthLogin('google', {
@@ -126,21 +104,14 @@ describe('AuthService', () => {
     });
 
     expect(prisma.user.findFirst).toHaveBeenCalled();
-    expect(prisma.user.update).toHaveBeenCalledWith({
-      where: { id: 'oauth-1' },
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.user.create).toHaveBeenCalledWith({
       data: {
-        loginStreak: 1,
-        lastLoginAt: new Date('2026-04-10T10:00:00.000Z'),
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        password: true,
-        provider: true,
-        providerId: true,
-        loginStreak: true,
-        lastLoginAt: true,
+        email: 'google@prepsy.in',
+        name: 'Google User',
+        provider: 'google',
+        providerId: 'google-sub',
+        password: null,
       },
     });
     expect(jwt.sign).toHaveBeenCalledWith({
@@ -153,6 +124,7 @@ describe('AuthService', () => {
         id: 'oauth-1',
         email: 'google@prepsy.in',
         name: 'Google User',
+        attendanceStreak: 0,
         streakDisabled: false,
       },
     });

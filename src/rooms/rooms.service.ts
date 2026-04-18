@@ -170,6 +170,14 @@ export class RoomsService {
     return `${parts.year}-${month}-${day}`;
   }
 
+  private shiftDateKey(dateKey: string, days: number) {
+    const [yearText, monthText, dayText] = dateKey.split('-');
+    const shifted = new Date(
+      Date.UTC(Number(yearText), Number(monthText) - 1, Number(dayText) + days),
+    );
+    return shifted.toISOString().slice(0, 10);
+  }
+
   private formatMinutes(minutes: number) {
     if (minutes < 60) {
       return `${minutes}m`;
@@ -676,6 +684,7 @@ export class RoomsService {
       this.prisma.user.findUnique({
         where: { id: userId },
         select: {
+          id: true,
           loginStreak: true,
           lastLoginAt: true,
           streakDisabled: true,
@@ -689,7 +698,11 @@ export class RoomsService {
         return total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime());
       }, 0) / 60000,
     );
-    const streak = user ? this.getCurrentStreak(user, now) : 0;
+    const streakUser =
+      user && currentAttendance
+        ? await this.recordSessionStreak(user, now)
+        : user;
+    const streak = streakUser ? this.getCurrentStreak(streakUser, now) : 0;
 
     return {
       roomId: room.roomId,
@@ -698,10 +711,48 @@ export class RoomsService {
       totalTimeLabel: this.formatMinutes(totalMinutes),
       studiedWithCount: companionAttendance.length,
       streak,
-      streakDisabled: user?.streakDisabled ?? false,
+      streakDisabled: false,
       message:
         'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
     };
+  }
+
+  private async recordSessionStreak(
+    user: {
+      id: string;
+      loginStreak: number;
+      lastLoginAt: Date | null;
+      streakDisabled: boolean;
+    },
+    now: Date,
+  ) {
+    const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
+    const todayKey = this.getDateKeyInTimeZone(now, timeZone);
+    const lastSessionKey = user.lastLoginAt
+      ? this.getDateKeyInTimeZone(user.lastLoginAt, timeZone)
+      : null;
+
+    if (lastSessionKey === todayKey) {
+      return user;
+    }
+
+    const yesterdayKey = this.shiftDateKey(todayKey, -1);
+    const nextStreak =
+      lastSessionKey === yesterdayKey ? user.loginStreak + 1 : 1;
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        loginStreak: nextStreak,
+        lastLoginAt: now,
+      },
+      select: {
+        id: true,
+        loginStreak: true,
+        lastLoginAt: true,
+        streakDisabled: true,
+      },
+    });
   }
 
   private getCurrentStreak(
@@ -712,7 +763,7 @@ export class RoomsService {
     },
     now: Date,
   ) {
-    if (user.streakDisabled || !user.lastLoginAt) {
+    if (!user.lastLoginAt) {
       return 0;
     }
 

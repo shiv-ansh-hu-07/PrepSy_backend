@@ -12,6 +12,7 @@ describe('RoomsService', () => {
     };
     user: {
       findUnique: jest.Mock;
+      update: jest.Mock;
     };
     roomMember: {
       deleteMany: jest.Mock;
@@ -39,6 +40,7 @@ describe('RoomsService', () => {
       },
       user: {
         findUnique: jest.fn(),
+        update: jest.fn(),
       },
       roomMember: {
         deleteMany: jest.fn(),
@@ -131,8 +133,15 @@ describe('RoomsService', () => {
       ])
       .mockResolvedValueOnce([{ userId: 'user-2' }, { userId: 'user-3' }]);
     prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
       loginStreak: 4,
-      lastLoginAt: new Date('2026-04-10T08:30:00.000Z'),
+      lastLoginAt: new Date('2026-04-09T08:30:00.000Z'),
+      streakDisabled: false,
+    });
+    prisma.user.update.mockResolvedValue({
+      id: 'user-1',
+      loginStreak: 5,
+      lastLoginAt: new Date('2026-04-10T10:00:00.000Z'),
       streakDisabled: false,
     });
 
@@ -142,7 +151,7 @@ describe('RoomsService', () => {
       totalMinutes: 60,
       totalTimeLabel: '1h',
       studiedWithCount: 2,
-      streak: 4,
+      streak: 5,
       streakDisabled: false,
       message:
         'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
@@ -150,6 +159,19 @@ describe('RoomsService', () => {
     expect(prisma.roomAttendance.update).toHaveBeenCalledWith({
       where: { id: 'attendance-1' },
       data: { leftAt: new Date('2026-04-10T10:00:00.000Z') },
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: {
+        loginStreak: 5,
+        lastLoginAt: new Date('2026-04-10T10:00:00.000Z'),
+      },
+      select: {
+        id: true,
+        loginStreak: true,
+        lastLoginAt: true,
+        streakDisabled: true,
+      },
     });
 
     jest.useRealTimers();

@@ -154,7 +154,6 @@ private async createLocalUser(
 private async createOauthUser(
   provider: 'google',
   profile: { email: string; providerId: string; name?: string },
-  disableStreak = false,
 ): Promise<AuthUserRecord> {
   return this.prisma.user.create({
     data: {
@@ -163,7 +162,6 @@ private async createOauthUser(
       provider,
       providerId: profile.providerId,
       password: null,
-      streakDisabled: disableStreak,
     },
   });
 }
@@ -203,6 +201,7 @@ private async createOauthUser(
   // LOGIN (EMAIL/PASSWORD)
   // =========================
   async login(email: string, password: string, disableStreak = false) {
+    void disableStreak;
     const existingUser = await this.findUserByEmail(email);
     if (!existingUser || !existingUser.password) {
       throw new UnauthorizedException('Invalid email or password');
@@ -211,8 +210,7 @@ private async createOauthUser(
     const valid = await bcrypt.compare(password, existingUser.password);
     if (!valid) throw new UnauthorizedException('Invalid email or password');
 
-    let user = await this.applyGuestStreakDisable(existingUser, disableStreak);
-    user = await this.recordDailyLogin(user);
+    const user = existingUser;
 
     const token = this.signJwt(user);
 
@@ -222,6 +220,7 @@ private async createOauthUser(
         id: user.id,
         email: user.email,
         name: user.name,
+        attendanceStreak: this.getCurrentLoginStreak(user),
         streakDisabled: user.streakDisabled,
       },
     };
@@ -234,10 +233,6 @@ private async createOauthUser(
     streakDisabled: boolean;
   },
 ) {
-  if (user.streakDisabled) {
-    return 0;
-  }
-
   if (!user.lastLoginAt) {
     return 0;
   }
@@ -266,14 +261,12 @@ private async createOauthUser(
       throw new UnauthorizedException('User not found');
     }
 
-    const user = await this.recordDailyLogin(existingUser);
-
     return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      attendanceStreak: this.getCurrentLoginStreak(user),
-      streakDisabled: user.streakDisabled,
+      id: existingUser.id,
+      email: existingUser.email,
+      name: existingUser.name,
+      attendanceStreak: this.getCurrentLoginStreak(existingUser),
+      streakDisabled: existingUser.streakDisabled,
     };
   }
 
@@ -285,32 +278,27 @@ private async createOauthUser(
     profile: { email: string; providerId: string; name?: string },
     disableStreak = false,
   ) {
+    void disableStreak;
     let user = await this.findOauthUser(provider, profile);
 
     if (!user) {
-      user = await this.createOauthUser(provider, profile, disableStreak);
+      user = await this.createOauthUser(provider, profile);
     }
 
     if (!user) {
       throw new UnauthorizedException('Unable to create or load user');
     }
 
-    const guestAdjustedUser = await this.applyGuestStreakDisable(
-      user,
-      disableStreak,
-    );
-
-    const finalUser = await this.recordDailyLogin(guestAdjustedUser);
-
-    const token = this.signJwt(finalUser);
+    const token = this.signJwt(user);
 
     return {
       token,
       user: {
-        id: finalUser.id,
-        email: finalUser.email,
-        name: finalUser.name,
-        streakDisabled: finalUser.streakDisabled,
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        attendanceStreak: this.getCurrentLoginStreak(user),
+        streakDisabled: user.streakDisabled,
       },
     };
   }
