@@ -220,55 +220,34 @@ private async createOauthUser(
         id: user.id,
         email: user.email,
         name: user.name,
-        attendanceStreak: this.getCurrentLoginStreak(user),
-        streakDisabled: user.streakDisabled,
+        attendanceStreak: user.loginStreak,
       },
     };
   }
 
-  private getCurrentLoginStreak(
-  user: {
-    loginStreak: number;
-    lastLoginAt: Date | null;
-    streakDisabled: boolean;
-  },
-) {
-  if (!user.lastLoginAt) {
-    return 0;
-  }
 
-  const todayKey = this.getDateKeyInTimeZone(new Date());
-  const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt);
-
-  if (lastLoginKey !== todayKey) {
-    return 0;
-  }
-
-  return user.loginStreak;
-}
 
   // =========================
   // CURRENT USER
   // =========================
   async me(userId: string) {
-    if (!userId) {
-      throw new UnauthorizedException('Invalid token');
-    }
-
-    const existingUser = await this.findUserById(userId);
-
-    if (!existingUser) {
-      throw new UnauthorizedException('User not found');
-    }
-
-    return {
-      id: existingUser.id,
-      email: existingUser.email,
-      name: existingUser.name,
-      attendanceStreak: this.getCurrentLoginStreak(existingUser),
-      streakDisabled: existingUser.streakDisabled,
-    };
+  if (!userId) {
+    throw new UnauthorizedException('Invalid token');
   }
+
+  const existingUser = await this.findUserById(userId);
+
+  if (!existingUser) {
+    throw new UnauthorizedException('User not found');
+  }
+
+  return {
+    id: existingUser.id,
+    email: existingUser.email,
+    name: existingUser.name,
+    attendanceStreak: existingUser.loginStreak, 
+  };
+}
 
   // =========================
   // GOOGLE OAUTH LOGIN
@@ -297,8 +276,7 @@ private async createOauthUser(
         id: user.id,
         email: user.email,
         name: user.name,
-        attendanceStreak: this.getCurrentLoginStreak(user),
-        streakDisabled: user.streakDisabled,
+        attendanceStreak: user.loginStreak,
       },
     };
   }

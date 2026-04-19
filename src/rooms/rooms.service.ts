@@ -692,14 +692,18 @@ export class RoomsService {
       }),
     ]);
 
-    const totalMinutes = Math.round(
-      allUserAttendance.reduce((total, attendance) => {
-        const leftAt = attendance.leftAt ?? now;
-        return total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime());
-      }, 0) / 60000,
-    );
+    const todayAttendance = allUserAttendance.filter((attendance) => {
+  return attendance.joinedAt >= start && attendance.joinedAt < end;
+});
+
+const totalMinutes = Math.round(
+  todayAttendance.reduce((total, attendance) => {
+    const leftAt = attendance.leftAt ?? now;
+    return total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime());
+  }, 0) / 60000,
+);
     const streakUser =
-      user && currentAttendance
+      user
         ? await this.recordSessionStreak(user, now)
         : user;
     const streak = streakUser ? this.getCurrentStreak(streakUser, now) : 0;
@@ -711,7 +715,7 @@ export class RoomsService {
       totalTimeLabel: this.formatMinutes(totalMinutes),
       studiedWithCount: companionAttendance.length,
       streak,
-      streakDisabled: false,
+      //streakDisabled: false,
       message:
         'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
     };
@@ -756,23 +760,21 @@ export class RoomsService {
   }
 
   private getCurrentStreak(
-    user: {
-      loginStreak: number;
-      lastLoginAt: Date | null;
-      streakDisabled: boolean;
-    },
-    now: Date,
-  ) {
-    if (!user.lastLoginAt) {
-      return 0;
-    }
+  user: {
+    loginStreak: number;
+    lastLoginAt: Date | null;
+  },
+  now: Date,
+) {
+  if (!user.lastLoginAt) return 0;
 
-    const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
-    const todayKey = this.getDateKeyInTimeZone(now, timeZone);
-    const lastLoginKey = this.getDateKeyInTimeZone(user.lastLoginAt, timeZone);
+  const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
 
-    return lastLoginKey === todayKey ? user.loginStreak : 0;
-  }
+  const todayKey = this.getDateKeyInTimeZone(now, timeZone);
+  const lastKey = this.getDateKeyInTimeZone(user.lastLoginAt, timeZone);
+
+  return lastKey === todayKey ? user.loginStreak : 0;
+}
 
   async deleteRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
