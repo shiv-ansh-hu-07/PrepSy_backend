@@ -385,16 +385,19 @@ export class RoomsService {
       return rooms.map((room) => ({ ...room, activeUsers: 0 }));
     }
 
-    return Promise.all(
-      rooms.map(async (room) => {
-        try {
-          const participants = await roomService.listParticipants(room.roomId);
-          return { ...room, activeUsers: participants.length };
-        } catch {
-          return { ...room, activeUsers: 0 };
-        }
-      }),
-    );
+    try {
+      const liveRooms = await roomService.listRooms();
+      const activeUsersByRoom = new Map(
+        liveRooms.map((liveRoom) => [liveRoom.name, liveRoom.numParticipants ?? 0]),
+      );
+
+      return rooms.map((room) => ({
+        ...room,
+        activeUsers: activeUsersByRoom.get(room.roomId) ?? 0,
+      }));
+    } catch {
+      return rooms.map((room) => ({ ...room, activeUsers: 0 }));
+    }
   }
 
   async createRoom(

@@ -70,8 +70,7 @@ export class StatsService {
     const scheduledActiveRooms = visibleRooms.filter((room) =>
       this.isRoomActive(room),
     );
-    const liveRoomStats =
-      await this.getLiveKitRoomStats(scheduledActiveRooms);
+    const liveRoomStats = await this.getLiveKitRoomStats();
 
     const activeUsers =
       liveRoomStats === null
@@ -122,34 +121,29 @@ export class StatsService {
     return new RoomServiceClient(host, apiKey, apiSecret);
   }
 
-  private async getLiveKitRoomStats(rooms: RoomStatsRecord[]) {
+  private async getLiveKitRoomStats() {
     const roomService = this.getRoomServiceClient();
 
     if (!roomService) {
       return null;
     }
 
-    const roomParticipantCounts = await Promise.all(
-      rooms.map(async (room) => {
-        try {
-          const participants = await roomService.listParticipants(room.roomId);
-          return participants.length;
-        } catch {
-          return 0;
-        }
-      }),
-    );
-    const activeRoomParticipantCounts = roomParticipantCounts.filter(
-      (count) => count > 0,
-    );
+    try {
+      const liveRooms = await roomService.listRooms();
+      const activeRoomParticipantCounts = liveRooms
+        .map((room) => room.numParticipants ?? 0)
+        .filter((count) => count > 0);
 
-    return {
-      activeRooms: activeRoomParticipantCounts.length,
-      activeUsers: activeRoomParticipantCounts.reduce(
-        (total, count) => total + count,
-        0,
-      ),
-    };
+      return {
+        activeRooms: activeRoomParticipantCounts.length,
+        activeUsers: activeRoomParticipantCounts.reduce(
+          (total, count) => total + count,
+          0,
+        ),
+      };
+    } catch {
+      return null;
+    }
   }
 
   private getHistoricalAverageRoomMinutes(

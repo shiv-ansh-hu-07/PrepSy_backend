@@ -125,7 +125,6 @@ describe('AuthService', () => {
         email: 'google@prepsy.in',
         name: 'Google User',
         attendanceStreak: 0,
-        streakDisabled: false,
       },
     });
   });
