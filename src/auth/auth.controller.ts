@@ -99,4 +99,10 @@ export class AuthController {
   me(@Req() req: RequestWithUser) {
     return this.auth.me(req.user?.sub || req.user?.id || '');
   }
+
+  @Post('presence')
+  @UseGuards(JwtAuthGuard)
+  presence() {
+    return { ok: true };
+  }
 }

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { RoomServiceClient } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service';
+import { PresenceService } from '../presence/presence.service';
 
 type RoomStatsRecord = {
   roomId: string;
@@ -18,7 +19,10 @@ export class StatsService {
     'Asia/Calcutta': 'Asia/Kolkata',
   };
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly presenceService: PresenceService,
+  ) {}
 
   async getStats() {
     const [rooms, todayAttendance, historicalRooms, historicalAttendance] =
@@ -72,10 +76,17 @@ export class StatsService {
     );
     const liveRoomStats = await this.getLiveKitRoomStats();
 
+    const presentSiteUsers = this.presenceService.getActiveUserIds();
     const activeUsers =
       liveRoomStats === null
-        ? new Set(todayAttendance.map((entry) => entry.userId)).size
-        : liveRoomStats.activeUsers;
+        ? new Set([
+            ...todayAttendance.map((entry) => entry.userId),
+            ...presentSiteUsers,
+          ]).size
+        : new Set([
+            ...liveRoomStats.activeUserIds,
+            ...presentSiteUsers,
+          ]).size;
     const avgFocusMinutes = this.getHistoricalAverageRoomMinutes(
       historicalRooms,
       historicalAttendance,
@@ -130,16 +141,24 @@ export class StatsService {
 
     try {
       const liveRooms = await roomService.listRooms();
-      const activeRoomParticipantCounts = liveRooms
-        .map((room) => room.numParticipants ?? 0)
-        .filter((count) => count > 0);
+      const activeRooms = liveRooms.filter((room) => (room.numParticipants ?? 0) > 0);
+      const participantLists = await Promise.all(
+        activeRooms.map(async (room) => {
+          try {
+            return await roomService.listParticipants(room.name);
+          } catch {
+            return [];
+          }
+        }),
+      );
+      const activeUserIds = participantLists
+        .flatMap((participants) => participants.map((participant) => participant.identity))
+        .filter(Boolean);
 
       return {
-        activeRooms: activeRoomParticipantCounts.length,
-        activeUsers: activeRoomParticipantCounts.reduce(
-          (total, count) => total + count,
-          0,
-        ),
+        activeRooms: activeRooms.length,
+        activeUsers: activeUserIds.length,
+        activeUserIds,
       };
     } catch {
       return null;

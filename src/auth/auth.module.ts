@@ -6,10 +6,12 @@ import { AuthController } from './auth.controller';
 import { PrismaService } from '../prisma/prisma.service';
 import { JwtStrategy } from './jwt.strategy';
 import { HttpModule } from '@nestjs/axios';
+import { PresenceModule } from '../presence/presence.module';
 
 @Module({
   imports: [
     HttpModule,
+    PresenceModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'default-dev-secret',

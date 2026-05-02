@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { StatsService } from './stats.service';
+import { PresenceService } from '../presence/presence.service';
 
 function restoreEnvValue(key: string, value?: string) {
   if (value === undefined) {
@@ -22,6 +23,9 @@ describe('StatsService', () => {
     room: { findMany: jest.Mock };
     roomAttendance: { findMany: jest.Mock };
   };
+  let presenceService: {
+    getActiveUserIds: jest.Mock;
+  };
 
   beforeEach(async () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-04-10T10:00:00.000Z'));
@@ -38,6 +42,9 @@ describe('StatsService', () => {
       room: { findMany: jest.fn() },
       roomAttendance: { findMany: jest.fn() },
     };
+    presenceService = {
+      getActiveUserIds: jest.fn().mockReturnValue(new Set()),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -45,6 +52,10 @@ describe('StatsService', () => {
         {
           provide: PrismaService,
           useValue: prisma,
+        },
+        {
+          provide: PresenceService,
+          useValue: presenceService,
         },
       ],
     }).compile();
