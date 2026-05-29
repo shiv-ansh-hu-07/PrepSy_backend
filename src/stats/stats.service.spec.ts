@@ -22,6 +22,8 @@ describe('StatsService', () => {
   let prisma: {
     room: { findMany: jest.Mock };
     roomAttendance: { findMany: jest.Mock };
+    roomMember: { findMany: jest.Mock };
+    user: { findUnique: jest.Mock };
   };
   let presenceService: {
     getActiveUserIds: jest.Mock;
@@ -41,6 +43,8 @@ describe('StatsService', () => {
     prisma = {
       room: { findMany: jest.fn() },
       roomAttendance: { findMany: jest.fn() },
+      roomMember: { findMany: jest.fn() },
+      user: { findUnique: jest.fn() },
     };
     presenceService = {
       getActiveUserIds: jest.fn().mockReturnValue(new Set()),
@@ -123,5 +127,120 @@ describe('StatsService', () => {
         avgFocusLabel: '2h 15m',
       },
     });
+  });
+
+  it('returns real user analytics from attendance, room, and topic records', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      name: 'Ariun',
+      email: 'ariun@example.com',
+    });
+    prisma.roomAttendance.findMany.mockResolvedValue([
+      {
+        id: 'attendance-1',
+        roomId: 'algebra-room',
+        joinedAt: new Date('2026-04-08T04:00:00.000Z'),
+        leftAt: new Date('2026-04-08T05:30:00.000Z'),
+        room: {
+          roomId: 'algebra-room',
+          name: 'Algebra Focus',
+          tags: ['math', 'dsa'],
+          durationMinutes: 90,
+        },
+      },
+      {
+        id: 'attendance-2',
+        roomId: 'web-room',
+        joinedAt: new Date('2026-04-09T04:00:00.000Z'),
+        leftAt: new Date('2026-04-09T05:00:00.000Z'),
+        room: {
+          roomId: 'web-room',
+          name: 'React Prep',
+          tags: ['react'],
+          durationMinutes: 90,
+        },
+      },
+      {
+        id: 'attendance-3',
+        roomId: 'web-room',
+        joinedAt: new Date('2026-04-10T04:00:00.000Z'),
+        leftAt: null,
+        room: {
+          roomId: 'web-room',
+          name: 'React Prep',
+          tags: ['react'],
+          durationMinutes: 120,
+        },
+      },
+    ]);
+    prisma.roomMember.findMany.mockResolvedValue([
+      {
+        joinedAt: new Date('2026-04-09T03:30:00.000Z'),
+        room: {
+          roomId: 'web-room',
+          name: 'React Prep',
+          tags: ['react'],
+          createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        },
+      },
+      {
+        joinedAt: new Date('2026-04-08T03:30:00.000Z'),
+        room: {
+          roomId: 'algebra-room',
+          name: 'Algebra Focus',
+          tags: ['math', 'dsa'],
+          createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        },
+      },
+    ]);
+
+    const result = await service.getUserAnalytics('user-1');
+
+    expect(result.analytics.summary).toMatchObject({
+      totalFocusMinutes: 270,
+      totalFocusLabel: '4h 30m',
+      sessionsJoined: 3,
+      sessionsCompleted: 2,
+      roomsJoined: 2,
+      topicsStudied: 3,
+      completedStudyDays: 2,
+      currentStreakDays: 2,
+      bestStreakDays: 2,
+      studiedDaysThisWeek: 3,
+      consistencyScore: 43,
+    });
+    expect(result.analytics.weeklyFocus).toEqual([
+      { date: '2026-04-06', minutes: 0 },
+      { date: '2026-04-07', minutes: 0 },
+      { date: '2026-04-08', minutes: 90 },
+      { date: '2026-04-09', minutes: 60 },
+      { date: '2026-04-10', minutes: 120 },
+      { date: '2026-04-11', minutes: 0 },
+      { date: '2026-04-12', minutes: 0 },
+    ]);
+    expect(result.analytics.rooms[0]).toMatchObject({
+      roomId: 'web-room',
+      minutes: 180,
+      sessions: 2,
+      completedSessions: 1,
+    });
+    expect(result.analytics.topics[0]).toMatchObject({
+      name: 'react',
+      minutes: 180,
+      sessions: 2,
+    });
+    expect(result.analytics.achievements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'first-session',
+          achieved: true,
+        }),
+        expect.objectContaining({
+          id: 'seven-day-streak',
+          achieved: false,
+          progress: 2,
+        }),
+      ]),
+    );
   });
 });

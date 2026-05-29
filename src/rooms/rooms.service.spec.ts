@@ -15,6 +15,8 @@ describe('RoomsService', () => {
       update: jest.Mock;
     };
     roomMember: {
+      findFirst: jest.Mock;
+      create: jest.Mock;
       deleteMany: jest.Mock;
     };
     message: {
@@ -26,6 +28,7 @@ describe('RoomsService', () => {
     roomAttendance: {
       findFirst: jest.Mock;
       findMany: jest.Mock;
+      create: jest.Mock;
       update: jest.Mock;
       deleteMany: jest.Mock;
     };
@@ -43,6 +46,8 @@ describe('RoomsService', () => {
         update: jest.fn(),
       },
       roomMember: {
+        findFirst: jest.fn(),
+        create: jest.fn(),
         deleteMany: jest.fn(),
       },
       message: {
@@ -54,6 +59,7 @@ describe('RoomsService', () => {
       roomAttendance: {
         findFirst: jest.fn(),
         findMany: jest.fn(),
+        create: jest.fn(),
         update: jest.fn(),
         deleteMany: jest.fn(),
       },
@@ -93,9 +99,9 @@ describe('RoomsService', () => {
     prisma.room.delete.mockReturnValue('delete room');
     prisma.$transaction.mockResolvedValue([]);
 
-    await expect(
-      service.deleteRoom('focus-room', 'user-1'),
-    ).resolves.toEqual({ success: true });
+    await expect(service.deleteRoom('focus-room', 'user-1')).resolves.toEqual({
+      success: true,
+    });
 
     expect(prisma.roomAttendance.deleteMany).toHaveBeenCalledWith({
       where: { roomId: 'focus-room' },
@@ -107,6 +113,48 @@ describe('RoomsService', () => {
       'delete attendance',
       'delete room',
     ]);
+  });
+
+  it('records a new attendance row when there is no open session today', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-04-10T10:00:00.000Z'));
+
+    prisma.room.findUnique.mockResolvedValue({
+      roomId: 'focus-room',
+      name: 'Focus Room',
+    });
+    prisma.roomMember.findFirst.mockResolvedValue({
+      roomId: 'focus-room',
+      userId: 'user-1',
+    });
+    prisma.roomAttendance.findFirst.mockResolvedValue(null);
+    prisma.roomAttendance.create.mockResolvedValue({});
+
+    await expect(service.joinRoom('focus-room', 'user-1')).resolves.toEqual({
+      success: true,
+    });
+
+    expect(prisma.roomAttendance.findFirst).toHaveBeenCalledWith({
+      where: {
+        roomId: 'focus-room',
+        userId: 'user-1',
+        joinedAt: expect.objectContaining({
+          gte: expect.any(Date),
+          lt: expect.any(Date),
+        }),
+        leftAt: null,
+      },
+      orderBy: {
+        joinedAt: 'desc',
+      },
+    });
+    expect(prisma.roomAttendance.create).toHaveBeenCalledWith({
+      data: {
+        roomId: 'focus-room',
+        userId: 'user-1',
+      },
+    });
+
+    jest.useRealTimers();
   });
 
   it('records leave time and returns room session analytics', async () => {

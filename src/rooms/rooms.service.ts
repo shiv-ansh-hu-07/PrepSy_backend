@@ -388,7 +388,10 @@ export class RoomsService {
     try {
       const liveRooms = await roomService.listRooms();
       const activeUsersByRoom = new Map(
-        liveRooms.map((liveRoom) => [liveRoom.name, liveRoom.numParticipants ?? 0]),
+        liveRooms.map((liveRoom) => [
+          liveRoom.name,
+          liveRoom.numParticipants ?? 0,
+        ]),
       );
 
       return rooms.map((room) => ({
@@ -605,7 +608,7 @@ export class RoomsService {
     }
 
     const { start, end } = this.getAttendanceWindow(new Date());
-    const alreadyJoinedToday = await this.prisma.roomAttendance.findFirst({
+    const openAttendanceToday = await this.prisma.roomAttendance.findFirst({
       where: {
         roomId,
         userId,
@@ -613,10 +616,14 @@ export class RoomsService {
           gte: start,
           lt: end,
         },
+        leftAt: null,
+      },
+      orderBy: {
+        joinedAt: 'desc',
       },
     });
 
-    if (!alreadyJoinedToday) {
+    if (!openAttendanceToday) {
       await this.prisma.roomAttendance.create({
         data: { roomId, userId },
       });
@@ -696,19 +703,18 @@ export class RoomsService {
     ]);
 
     const todayAttendance = allUserAttendance.filter((attendance) => {
-  return attendance.joinedAt >= start && attendance.joinedAt < end;
-});
+      return attendance.joinedAt >= start && attendance.joinedAt < end;
+    });
 
-const totalMinutes = Math.round(
-  todayAttendance.reduce((total, attendance) => {
-    const leftAt = attendance.leftAt ?? now;
-    return total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime());
-  }, 0) / 60000,
-);
-    const streakUser =
-      user
-        ? await this.recordSessionStreak(user, now)
-        : user;
+    const totalMinutes = Math.round(
+      todayAttendance.reduce((total, attendance) => {
+        const leftAt = attendance.leftAt ?? now;
+        return (
+          total + Math.max(0, leftAt.getTime() - attendance.joinedAt.getTime())
+        );
+      }, 0) / 60000,
+    );
+    const streakUser = user ? await this.recordSessionStreak(user, now) : user;
     const streak = streakUser ? this.getCurrentStreak(streakUser, now) : 0;
 
     return {
@@ -718,7 +724,7 @@ const totalMinutes = Math.round(
       totalTimeLabel: this.formatMinutes(totalMinutes),
       studiedWithCount: companionAttendance.length,
       streak,
-      //streakDisabled: false,
+      streakDisabled: streakUser?.streakDisabled ?? false,
       message:
         'Great work today. Rest up, keep the rhythm alive, and come back tomorrow for the next focused session.',
     };
@@ -763,21 +769,21 @@ const totalMinutes = Math.round(
   }
 
   private getCurrentStreak(
-  user: {
-    loginStreak: number;
-    lastLoginAt: Date | null;
-  },
-  now: Date,
-) {
-  if (!user.lastLoginAt) return 0;
+    user: {
+      loginStreak: number;
+      lastLoginAt: Date | null;
+    },
+    now: Date,
+  ) {
+    if (!user.lastLoginAt) return 0;
 
-  const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
+    const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
 
-  const todayKey = this.getDateKeyInTimeZone(now, timeZone);
-  const lastKey = this.getDateKeyInTimeZone(user.lastLoginAt, timeZone);
+    const todayKey = this.getDateKeyInTimeZone(now, timeZone);
+    const lastKey = this.getDateKeyInTimeZone(user.lastLoginAt, timeZone);
 
-  return lastKey === todayKey ? user.loginStreak : 0;
-}
+    return lastKey === todayKey ? user.loginStreak : 0;
+  }
 
   async deleteRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
