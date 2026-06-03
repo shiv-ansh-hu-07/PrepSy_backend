@@ -1,0 +1,420 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+
+type ProfileInput = Record<string, unknown>;
+type ProfileWriteData = Omit<
+  Prisma.UserProfileUncheckedCreateInput,
+  'id' | 'userId' | 'createdAt' | 'updatedAt'
+>;
+
+type ParsedProfileInput = {
+  fullName: string | null;
+  age: number | null;
+  isDiscoverable: boolean;
+} & Record<(typeof textFields)[number], string | null> &
+  Record<(typeof arrayFields)[number], string[]>;
+
+const arrayFields = [
+  'goals',
+  'interests',
+  'skills',
+  'languages',
+  'examTargets',
+  'lookingFor',
+  'availability',
+] as const;
+
+const textFields = [
+  'username',
+  'phone',
+  'avatarUrl',
+  'bio',
+  'gender',
+  'city',
+  'state',
+  'country',
+  'timezone',
+  'institutionType',
+  'institutionName',
+  'degree',
+  'branch',
+  'semester',
+  'expectedGraduation',
+  'company',
+  'role',
+  'experienceLevel',
+  'workMode',
+  'collaborationPreference',
+  'portfolioUrl',
+  'linkedinUrl',
+  'githubUrl',
+] as const;
+
+const requiredLabels: Record<string, string> = {
+  fullName: 'Full name',
+  age: 'Age',
+  gender: 'Gender',
+  goals: 'Goals',
+};
+
+const recommendationLabels: Record<string, string> = {
+  city: 'City',
+  institutionType: 'Institution type',
+  institutionName: 'Institution name',
+  interests: 'Interests',
+  lookingFor: 'Collaboration preference',
+  availability: 'Availability',
+};
+
+@Injectable()
+export class ProfilesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async getMyProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        profile: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      profile: this.serializeProfile(user),
+    };
+  }
+
+  async updateMyProfile(userId: string, body: unknown) {
+    const input = this.parseInput(body);
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existingUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    const validationProfile = {
+      fullName: input.fullName,
+      age: input.age,
+      gender: input.gender,
+      goals: input.goals,
+    };
+    const missingRequiredFields =
+      this.getMissingRequiredFields(validationProfile);
+
+    if (missingRequiredFields.length > 0) {
+      throw new BadRequestException({
+        message: 'Please complete the required profile fields.',
+        missingRequiredFields,
+      });
+    }
+
+    const profileData = this.toProfileUpdateInput(input);
+
+    const [user] = await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          name: input.fullName,
+        },
+        include: {
+          profile: true,
+        },
+      }),
+      this.prisma.userProfile.upsert({
+        where: { userId },
+        create: {
+          userId,
+          ...profileData,
+        },
+        update: profileData,
+      }),
+    ]);
+
+    const reloadedUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      include: { profile: true },
+    });
+
+    if (!reloadedUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      profile: this.serializeProfile(reloadedUser),
+      message: 'Profile saved successfully.',
+    };
+  }
+
+  private parseInput(body: unknown) {
+    const input = this.isRecord(body) ? (body as ProfileInput) : {};
+
+    const parsed = {
+      fullName: this.cleanText(input.fullName, 90),
+      age: this.cleanAge(input.age),
+      isDiscoverable:
+        typeof input.isDiscoverable === 'boolean' ? input.isDiscoverable : true,
+      ...Object.fromEntries(
+        textFields.map((field) => [field, this.cleanText(input[field], 220)]),
+      ),
+      ...Object.fromEntries(
+        arrayFields.map((field) => [field, this.cleanArray(input[field])]),
+      ),
+    } as ParsedProfileInput;
+
+    return parsed;
+  }
+
+  private toProfileUpdateInput(input: ParsedProfileInput) {
+    const data: ProfileWriteData = {
+      username: input.username,
+      phone: input.phone,
+      avatarUrl: input.avatarUrl,
+      bio: input.bio,
+      age: input.age,
+      gender: input.gender,
+      goals: input.goals,
+      interests: input.interests,
+      skills: input.skills,
+      languages: input.languages,
+      examTargets: input.examTargets,
+      lookingFor: input.lookingFor,
+      availability: input.availability,
+      city: input.city,
+      state: input.state,
+      country: input.country,
+      timezone: input.timezone,
+      institutionType: input.institutionType,
+      institutionName: input.institutionName,
+      degree: input.degree,
+      branch: input.branch,
+      semester: input.semester,
+      expectedGraduation: input.expectedGraduation,
+      company: input.company,
+      role: input.role,
+      experienceLevel: input.experienceLevel,
+      workMode: input.workMode,
+      collaborationPreference: input.collaborationPreference,
+      portfolioUrl: input.portfolioUrl,
+      linkedinUrl: input.linkedinUrl,
+      githubUrl: input.githubUrl,
+      isDiscoverable: input.isDiscoverable,
+    };
+
+    return data;
+  }
+
+  private serializeProfile(user: {
+    id: string;
+    email: string;
+    name: string | null;
+    profile: null | {
+      username: string | null;
+      phone: string | null;
+      avatarUrl: string | null;
+      bio: string | null;
+      age: number | null;
+      gender: string | null;
+      goals: string[];
+      interests: string[];
+      skills: string[];
+      languages: string[];
+      examTargets: string[];
+      lookingFor: string[];
+      availability: string[];
+      city: string | null;
+      state: string | null;
+      country: string | null;
+      timezone: string | null;
+      institutionType: string | null;
+      institutionName: string | null;
+      degree: string | null;
+      branch: string | null;
+      semester: string | null;
+      expectedGraduation: string | null;
+      company: string | null;
+      role: string | null;
+      experienceLevel: string | null;
+      workMode: string | null;
+      collaborationPreference: string | null;
+      portfolioUrl: string | null;
+      linkedinUrl: string | null;
+      githubUrl: string | null;
+      isDiscoverable: boolean;
+      updatedAt: Date;
+    };
+  }) {
+    const profile = user.profile;
+    const serialized = {
+      userId: user.id,
+      email: user.email,
+      fullName: user.name || '',
+      username: profile?.username || '',
+      phone: profile?.phone || '',
+      avatarUrl: profile?.avatarUrl || '',
+      bio: profile?.bio || '',
+      age: profile?.age || null,
+      gender: profile?.gender || '',
+      goals: profile?.goals || [],
+      interests: profile?.interests || [],
+      skills: profile?.skills || [],
+      languages: profile?.languages || [],
+      examTargets: profile?.examTargets || [],
+      lookingFor: profile?.lookingFor || [],
+      availability: profile?.availability || [],
+      city: profile?.city || '',
+      state: profile?.state || '',
+      country: profile?.country || '',
+      timezone: profile?.timezone || '',
+      institutionType: profile?.institutionType || '',
+      institutionName: profile?.institutionName || '',
+      degree: profile?.degree || '',
+      branch: profile?.branch || '',
+      semester: profile?.semester || '',
+      expectedGraduation: profile?.expectedGraduation || '',
+      company: profile?.company || '',
+      role: profile?.role || '',
+      experienceLevel: profile?.experienceLevel || '',
+      workMode: profile?.workMode || '',
+      collaborationPreference: profile?.collaborationPreference || '',
+      portfolioUrl: profile?.portfolioUrl || '',
+      linkedinUrl: profile?.linkedinUrl || '',
+      githubUrl: profile?.githubUrl || '',
+      isDiscoverable: profile?.isDiscoverable ?? true,
+      updatedAt: profile?.updatedAt?.toISOString() || null,
+    };
+
+    const missingRequiredFields = this.getMissingRequiredFields(serialized);
+    const missingRecommendationFields =
+      this.getMissingRecommendationFields(serialized);
+
+    return {
+      ...serialized,
+      completion: {
+        requiredComplete: missingRequiredFields.length === 0,
+        completionPercent: this.getCompletionPercent(serialized),
+        missingRequiredFields,
+        missingRecommendationFields,
+      },
+      matchingSignals: {
+        goals: serialized.goals,
+        interests: serialized.interests,
+        city: serialized.city,
+        institutionType: serialized.institutionType,
+        institutionName: serialized.institutionName,
+        skills: serialized.skills,
+        languages: serialized.languages,
+        lookingFor: serialized.lookingFor,
+        availability: serialized.availability,
+      },
+    };
+  }
+
+  private getMissingRequiredFields(profile: {
+    fullName?: string | null;
+    age?: number | null;
+    gender?: string | null;
+    goals?: string[];
+  }) {
+    const missing: string[] = [];
+
+    if (!profile.fullName?.trim()) missing.push(requiredLabels.fullName);
+    if (!profile.age) missing.push(requiredLabels.age);
+    if (!profile.gender?.trim()) missing.push(requiredLabels.gender);
+    if (!profile.goals?.length) missing.push(requiredLabels.goals);
+
+    return missing;
+  }
+
+  private getMissingRecommendationFields(profile: Record<string, unknown>) {
+    return Object.entries(recommendationLabels)
+      .filter(([field]) => {
+        const value = profile[field];
+        return Array.isArray(value)
+          ? value.length === 0
+          : !String(value || '').trim();
+      })
+      .map(([, label]) => label);
+  }
+
+  private getCompletionPercent(profile: Record<string, unknown>) {
+    const trackedFields = [
+      'fullName',
+      'age',
+      'gender',
+      'goals',
+      'interests',
+      'city',
+      'institutionType',
+      'institutionName',
+      'lookingFor',
+      'availability',
+      'skills',
+      'languages',
+    ];
+
+    const completed = trackedFields.filter((field) => {
+      const value = profile[field];
+      return Array.isArray(value)
+        ? value.length > 0
+        : Boolean(String(value || '').trim());
+    }).length;
+
+    return Math.round((completed / trackedFields.length) * 100);
+  }
+
+  private cleanText(value: unknown, maxLength: number) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+
+    const clean = value.trim().slice(0, maxLength);
+    return clean || null;
+  }
+
+  private cleanArray(value: unknown) {
+    const rawValues = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? value.split(',')
+        : [];
+
+    return Array.from(
+      new Set(
+        rawValues
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter(Boolean)
+          .slice(0, 16),
+      ),
+    );
+  }
+
+  private cleanAge(value: unknown) {
+    const age = Number(value);
+    if (!Number.isInteger(age)) {
+      return null;
+    }
+
+    if (age < 13 || age > 100) {
+      throw new BadRequestException('Age must be between 13 and 100.');
+    }
+
+    return age;
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+  }
+}

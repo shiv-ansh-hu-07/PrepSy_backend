@@ -10,6 +10,7 @@ import { MessagesModule } from './messages/messages.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CommunityModule } from './community/community.module';
 import { PresenceModule } from './presence/presence.module';
+import { ProfilesModule } from './profiles/profiles.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { PresenceModule } from './presence/presence.module';
     MessagesModule,
     CommunityModule,
     PresenceModule,
+    ProfilesModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController, LivekitController],

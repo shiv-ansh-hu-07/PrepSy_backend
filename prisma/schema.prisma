@@ -26,8 +26,61 @@ model User {
   attendance  RoomAttendance[]
   communityPosts   CommunityPost[]
   communityReplies CommunityReply[]
+  profile UserProfile?
 
   @@unique([provider, providerId])
+}
+
+model UserProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  username  String?  @unique
+  phone     String?
+  avatarUrl String?
+  bio       String?
+
+  age    Int?
+  gender String?
+  goals  String[] @default([])
+
+  interests String[] @default([])
+  skills    String[] @default([])
+  languages String[] @default([])
+  examTargets String[] @default([])
+  lookingFor  String[] @default([])
+  availability String[] @default([])
+
+  city     String?
+  state    String?
+  country  String?
+  timezone String?
+
+  institutionType   String?
+  institutionName   String?
+  degree            String?
+  branch            String?
+  semester          String?
+  expectedGraduation String?
+
+  company         String?
+  role            String?
+  experienceLevel String?
+  workMode        String?
+
+  collaborationPreference String?
+  portfolioUrl String?
+  linkedinUrl  String?
+  githubUrl    String?
+  isDiscoverable Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([city])
+  @@index([institutionType])
+  @@index([institutionName])
 }
 
 
