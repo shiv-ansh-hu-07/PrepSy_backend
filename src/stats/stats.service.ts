@@ -198,10 +198,17 @@ export class StatsService {
     );
 
     const completedRows = attendanceRows.filter((entry) => entry.completed);
+    const liveRows = attendanceRows.filter(
+      (entry) => !entry.completed && entry.minutes > 0,
+    );
     const completedDateKeys = Array.from(
       new Set(completedRows.map((entry) => entry.dateKey)),
     ).sort();
-    const totalFocusMinutes = attendanceRows.reduce(
+    const totalFocusMinutes = completedRows.reduce(
+      (total, entry) => total + entry.minutes,
+      0,
+    );
+    const liveFocusMinutes = liveRows.reduce(
       (total, entry) => total + entry.minutes,
       0,
     );
@@ -211,7 +218,7 @@ export class StatsService {
       timeZone,
     );
     const bestStreakDays = this.getBestStudyStreak(completedDateKeys);
-    const minutesByDate = this.getMinutesByDate(attendanceRows);
+    const minutesByDate = this.getMinutesByDate(completedRows);
     const monthDateKeys = this.getMonthDateKeys(now, timeZone);
     const weekDateKeys = this.getWeekDateKeys(now, timeZone);
     const studiedDaysThisWeek = weekDateKeys.filter(
@@ -219,7 +226,7 @@ export class StatsService {
     ).length;
 
     const rooms = this.getRoomAnalytics(attendanceRows);
-    const topics = this.getTopicAnalytics(attendanceRows);
+    const topics = this.getTopicAnalytics(completedRows);
     const joinedRooms = this.getJoinedRoomAnalytics(
       memberships as AnalyticsRoomMembershipRecord[],
     );
@@ -236,6 +243,8 @@ export class StatsService {
         summary: {
           totalFocusMinutes,
           totalFocusLabel: this.formatMinutes(totalFocusMinutes),
+          liveFocusMinutes,
+          liveFocusLabel: this.formatMinutes(liveFocusMinutes),
           sessionsJoined: attendanceRows.length,
           sessionsCompleted: completedRows.length,
           roomsJoined: joinedRooms.length,
@@ -271,7 +280,8 @@ export class StatsService {
             tags: entry.tags,
             joinedAt: entry.joinedAt.toISOString(),
             leftAt: entry.leftAt?.toISOString() || null,
-            minutes: entry.minutes,
+            minutes: entry.completed ? entry.minutes : 0,
+            liveMinutes: entry.completed ? 0 : entry.minutes,
             completed: entry.completed,
           })),
         joinedRooms,
@@ -402,17 +412,10 @@ export class StatsService {
     }
 
     const endAt = attendance.leftAt || now;
-    const rawMinutes = Math.max(
+    return Math.max(
       0,
       Math.round((endAt.getTime() - attendance.joinedAt.getTime()) / 60000),
     );
-    const roomLimit = attendance.room?.durationMinutes;
-
-    if (typeof roomLimit === 'number' && roomLimit > 0) {
-      return Math.min(rawMinutes, roomLimit);
-    }
-
-    return rawMinutes;
   }
 
   private getMinutesByDate(
@@ -447,6 +450,7 @@ export class StatsService {
         name: string;
         tags: Set<string>;
         minutes: number;
+        liveMinutes: number;
         sessions: number;
         completedSessions: number;
         lastJoinedAt: Date;
@@ -461,6 +465,7 @@ export class StatsService {
           name: entry.roomName,
           tags: new Set<string>(),
           minutes: 0,
+          liveMinutes: 0,
           sessions: 0,
           completedSessions: 0,
           lastJoinedAt: entry.joinedAt,
@@ -469,13 +474,15 @@ export class StatsService {
           name: string;
           tags: Set<string>;
           minutes: number;
+          liveMinutes: number;
           sessions: number;
           completedSessions: number;
           lastJoinedAt: Date;
         });
 
       entry.tags.forEach((tag) => current.tags.add(tag));
-      current.minutes += entry.minutes;
+      current.minutes += entry.completed ? entry.minutes : 0;
+      current.liveMinutes += entry.completed ? 0 : entry.minutes;
       current.sessions += 1;
       current.completedSessions += entry.completed ? 1 : 0;
 
@@ -492,6 +499,7 @@ export class StatsService {
         name: room.name,
         tags: Array.from(room.tags),
         minutes: room.minutes,
+        liveMinutes: room.liveMinutes,
         totalTimeLabel: this.formatMinutes(room.minutes),
         sessions: room.sessions,
         completedSessions: room.completedSessions,

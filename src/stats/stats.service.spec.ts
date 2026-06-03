@@ -145,7 +145,7 @@ describe('StatsService', () => {
           roomId: 'algebra-room',
           name: 'Algebra Focus',
           tags: ['math', 'dsa'],
-          durationMinutes: 90,
+          durationMinutes: 30,
         },
       },
       {
@@ -157,7 +157,7 @@ describe('StatsService', () => {
           roomId: 'web-room',
           name: 'React Prep',
           tags: ['react'],
-          durationMinutes: 90,
+          durationMinutes: 40,
         },
       },
       {
@@ -197,8 +197,10 @@ describe('StatsService', () => {
     const result = await service.getUserAnalytics('user-1');
 
     expect(result.analytics.summary).toMatchObject({
-      totalFocusMinutes: 270,
-      totalFocusLabel: '4h 30m',
+      totalFocusMinutes: 150,
+      totalFocusLabel: '2h 30m',
+      liveFocusMinutes: 360,
+      liveFocusLabel: '6h',
       sessionsJoined: 3,
       sessionsCompleted: 2,
       roomsJoined: 2,
@@ -206,29 +208,38 @@ describe('StatsService', () => {
       completedStudyDays: 2,
       currentStreakDays: 2,
       bestStreakDays: 2,
-      studiedDaysThisWeek: 3,
-      consistencyScore: 43,
+      studiedDaysThisWeek: 2,
+      consistencyScore: 29,
     });
     expect(result.analytics.weeklyFocus).toEqual([
       { date: '2026-04-06', minutes: 0 },
       { date: '2026-04-07', minutes: 0 },
       { date: '2026-04-08', minutes: 90 },
       { date: '2026-04-09', minutes: 60 },
-      { date: '2026-04-10', minutes: 120 },
+      { date: '2026-04-10', minutes: 0 },
       { date: '2026-04-11', minutes: 0 },
       { date: '2026-04-12', minutes: 0 },
     ]);
-    expect(result.analytics.rooms[0]).toMatchObject({
-      roomId: 'web-room',
-      minutes: 180,
-      sessions: 2,
-      completedSessions: 1,
-    });
-    expect(result.analytics.topics[0]).toMatchObject({
-      name: 'react',
-      minutes: 180,
-      sessions: 2,
-    });
+    expect(result.analytics.rooms).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          roomId: 'web-room',
+          minutes: 60,
+          liveMinutes: 360,
+          sessions: 2,
+          completedSessions: 1,
+        }),
+      ]),
+    );
+    expect(result.analytics.topics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'react',
+          minutes: 60,
+          sessions: 1,
+        }),
+      ]),
+    );
     expect(result.analytics.achievements).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
