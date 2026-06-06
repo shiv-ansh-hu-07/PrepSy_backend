@@ -115,25 +115,17 @@ export class ProfilesService {
     const profileData = this.toProfileUpdateInput(input);
 
     try {
-      await this.prisma.$transaction([
-        this.prisma.user.update({
+      await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
           where: { id: userId },
-          data: {
-            name: input.fullName,
-          },
-          select: {
-            id: true,
-          },
-        }),
-        this.prisma.userProfile.upsert({
+          data: { name: input.fullName },
+        });
+        await tx.userProfile.upsert({
           where: { userId },
-          create: {
-            userId,
-            ...profileData,
-          },
+          create: { userId, ...profileData },
           update: profileData,
-        }),
-      ]);
+        });
+      });
     } catch (error) {
       if (this.isUniqueProfileValue(error)) {
         throw new BadRequestException('This username is already taken.');
@@ -145,7 +137,7 @@ export class ProfilesService {
         );
       }
 
-      throw error;
+      throw new BadRequestException('Could not save your profile. Please try again.');
     }
 
     const reloadedUser = await this.getUserWithProfile(userId);
@@ -449,15 +441,16 @@ export class ProfilesService {
   }
 
   private cleanAge(value: unknown) {
-    const age = Number(value);
-    if (!Number.isInteger(age)) {
+    if (value === null || value === undefined || value === '' || value === 'null') {
       return null;
     }
-
+    const age = Number(value);
+    if (isNaN(age) || !Number.isInteger(age)) {
+      return null;
+    }
     if (age < 13 || age > 100) {
       throw new BadRequestException('Age must be between 13 and 100.');
     }
-
     return age;
   }
 
