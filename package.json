@@ -11,7 +11,7 @@
     "start": "node dist/main.js",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "prisma migrate resolve --applied 20260322091500_add_streak_disabled_flag; prisma migrate deploy && node dist/main.js",
+    "start:prod": "prisma migrate resolve --applied 20260322091500_add_streak_disabled_flag; prisma migrate resolve --applied 20260323101500_add_community_discuss; prisma migrate resolve --applied 20260325104500_add_community_application_link; prisma migrate deploy && node dist/main.js",
     "db:migrate": "prisma migrate deploy",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
