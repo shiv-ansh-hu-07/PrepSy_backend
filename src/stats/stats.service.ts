@@ -136,6 +136,7 @@ export class StatsService {
           id: true,
           name: true,
           email: true,
+          loginStreak: true,
         },
       }),
       this.prisma.roomAttendance.findMany({
@@ -250,7 +251,7 @@ export class StatsService {
           roomsJoined: joinedRooms.length,
           topicsStudied: topics.length,
           completedStudyDays: completedDateKeys.length,
-          currentStreakDays,
+          currentStreakDays: user?.loginStreak ?? 0,
           bestStreakDays,
           studiedDaysThisWeek,
           consistencyScore: Math.round((studiedDaysThisWeek / 7) * 100),
