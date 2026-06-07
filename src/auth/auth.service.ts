@@ -118,6 +118,16 @@ private isProfileStorageUnavailable(error: unknown) {
   );
 }
 
+  // Returns 0 if the last completed session was 2+ days ago (streak expired).
+  private getEffectiveStreak(user: { loginStreak: number; lastLoginAt: Date | null }): number {
+    if (!user.lastLoginAt) return 0;
+    const now = new Date();
+    const todayKey = this.getDateKeyInTimeZone(now);
+    const yesterdayKey = this.shiftDateKey(todayKey, -1);
+    const lastKey = this.getDateKeyInTimeZone(user.lastLoginAt);
+    return lastKey === todayKey || lastKey === yesterdayKey ? user.loginStreak : 0;
+}
+
 private async recordDailyLogin(
   user: AuthUserRecord,
 ): Promise<AuthUserRecord> {
@@ -255,7 +265,7 @@ private async createOauthUser(
         id: user.id,
         email: user.email,
         name: user.name,
-        attendanceStreak: user.loginStreak,
+        attendanceStreak: this.getEffectiveStreak(user),
         avatarUrl: user.profile?.avatarUrl || null,
       },
     };
@@ -281,7 +291,7 @@ private async createOauthUser(
     id: existingUser.id,
     email: existingUser.email,
     name: existingUser.name,
-    attendanceStreak: existingUser.loginStreak, 
+    attendanceStreak: this.getEffectiveStreak(existingUser),
     avatarUrl: existingUser.profile?.avatarUrl || null,
   };
 }
@@ -313,7 +323,7 @@ private async createOauthUser(
         id: user.id,
         email: user.email,
         name: user.name,
-        attendanceStreak: user.loginStreak,
+        attendanceStreak: this.getEffectiveStreak(user),
         avatarUrl: user.profile?.avatarUrl || null,
       },
     };
