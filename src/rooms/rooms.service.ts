@@ -382,6 +382,9 @@ export class RoomsService {
     const roomService = this.getRoomServiceClient();
 
     if (!roomService || rooms.length === 0) {
+      if (!roomService) {
+        console.warn('[LiveKit] No credentials configured — activeUsers will be 0 for all rooms');
+      }
       return rooms.map((room) => ({ ...room, activeUsers: 0 }));
     }
 
@@ -398,7 +401,8 @@ export class RoomsService {
         ...room,
         activeUsers: activeUsersByRoom.get(room.roomId) ?? 0,
       }));
-    } catch {
+    } catch (error) {
+      console.error('[LiveKit] listRooms failed — activeUsers will be 0:', error instanceof Error ? error.message : error);
       return rooms.map((room) => ({ ...room, activeUsers: 0 }));
     }
   }

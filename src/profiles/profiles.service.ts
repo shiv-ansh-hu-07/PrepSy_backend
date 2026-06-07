@@ -76,21 +76,27 @@ export class ProfilesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getMyProfile(userId: string) {
-    const user = await this.getUserWithProfile(userId);
-
-    return {
-      profile: this.serializeProfile(user),
-    };
+    try {
+      const user = await this.getUserWithProfile(userId);
+      return { profile: this.serializeProfile(user) };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      throw new BadRequestException('Could not load your profile. Please try again.');
+    }
   }
 
   async updateMyProfile(userId: string, body: unknown) {
     const input = this.parseInput(body);
-    const existingUser = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-      },
-    });
+
+    let existingUser: { id: string } | null;
+    try {
+      existingUser = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true },
+      });
+    } catch {
+      throw new BadRequestException('Could not verify your account. Please try again.');
+    }
 
     if (!existingUser) {
       throw new NotFoundException('User not found');
@@ -140,12 +146,16 @@ export class ProfilesService {
       throw new BadRequestException('Could not save your profile. Please try again.');
     }
 
-    const reloadedUser = await this.getUserWithProfile(userId);
-
-    return {
-      profile: this.serializeProfile(reloadedUser),
-      message: 'Profile saved successfully.',
-    };
+    try {
+      const reloadedUser = await this.getUserWithProfile(userId);
+      return {
+        profile: this.serializeProfile(reloadedUser),
+        message: 'Profile saved successfully.',
+      };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      throw new BadRequestException('Profile saved but could not reload. Please refresh the page.');
+    }
   }
 
   private async getUserWithProfile(userId: string) {

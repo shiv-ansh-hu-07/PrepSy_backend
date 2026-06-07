@@ -36,7 +36,7 @@ export class CommunityService {
     return Array.from(
       new Set(
         (tags || [])
-          .map((tag) => tag?.trim().toLowerCase())
+          .map((tag) => tag?.trim().toLowerCase().replace(/^#+/, ''))
           .filter((tag): tag is string => Boolean(tag))
           .slice(0, 5),
       ),
