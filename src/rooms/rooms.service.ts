@@ -421,6 +421,8 @@ export class RoomsService {
     recurrenceEndDate?: string,
     scheduleTime?: string,
     timezone?: string,
+    femaleOnly?: boolean,
+    preferredLanguages?: string[],
   ) {
     if (!name?.trim()) {
       throw new BadRequestException('Room name is required');
@@ -479,6 +481,10 @@ export class RoomsService {
           recurrenceEndDate: recurrenceEndDate
             ? new Date(recurrenceEndDate)
             : null,
+          femaleOnly: Boolean(femaleOnly),
+          preferredLanguages: Array.isArray(preferredLanguages)
+            ? preferredLanguages.filter(Boolean)
+            : [],
           remindersent: false,
         },
       });

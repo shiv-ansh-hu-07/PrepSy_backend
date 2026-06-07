@@ -104,6 +104,9 @@ model Room {
   recurrenceType     String?   
   recurrenceEndDate  DateTime?
 
+  femaleOnly         Boolean  @default(false)
+  preferredLanguages String[] @default([])
+
   remindersent Boolean @default(false)
 
   members  RoomMember[]

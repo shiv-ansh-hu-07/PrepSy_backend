@@ -41,6 +41,8 @@ export class RoomsController {
     @Body('recurrenceEndDate') recurrenceEndDate?: string,
     @Body('scheduleTime') scheduleTime?: string,
     @Body('timezone') timezone?: string,
+    @Body('femaleOnly') femaleOnly?: boolean,
+    @Body('preferredLanguages') preferredLanguages?: string[],
   ) {
     return this.roomsService.createRoom(
       name,
@@ -56,6 +58,8 @@ export class RoomsController {
       recurrenceEndDate,
       scheduleTime,
       timezone,
+      femaleOnly,
+      preferredLanguages,
     );
   }
 
