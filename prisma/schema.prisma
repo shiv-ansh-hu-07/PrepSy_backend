@@ -27,6 +27,7 @@ model User {
   communityPosts   CommunityPost[]
   communityReplies CommunityReply[]
   profile UserProfile?
+  focusSessions    FocusSession[]
 
   @@unique([provider, providerId])
 }
@@ -169,6 +170,30 @@ model RoomAttendance {
   user User @relation(fields: [userId], references: [id])
 
   @@index([roomId])
+}
+
+model FocusSession {
+  id        String   @id @default(cuid())
+  userId    String
+  roomId    String
+  roomName  String?
+
+  sessionDate     DateTime @default(now())
+  durationMinutes Int      @default(0)
+
+  focusScore      Int @default(0)
+  engagementScore Int @default(0)
+  distractionCount   Int @default(0)
+  offScreenSeconds   Int @default(0)
+  highFocusPercent   Int @default(0)
+  medFocusPercent    Int @default(0)
+  lowFocusPercent    Int @default(0)
+  totalSamples       Int @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sessionDate(sort: Desc)])
+  @@index([roomId, sessionDate(sort: Desc)])
 }
 
 model CommunityPost {

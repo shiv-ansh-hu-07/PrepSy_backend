@@ -11,6 +11,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CommunityModule } from './community/community.module';
 import { PresenceModule } from './presence/presence.module';
 import { ProfilesModule } from './profiles/profiles.module';
+import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ProfilesModule } from './profiles/profiles.module';
     CommunityModule,
     PresenceModule,
     ProfilesModule,
+    FocusAnalyticsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController, LivekitController],
