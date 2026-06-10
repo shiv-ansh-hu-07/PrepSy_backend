@@ -79,7 +79,7 @@ export class NotificationsService {
     if (atRiskIds.length === 0) return;
 
     const users = await this.prisma.user.findMany({
-      where: { id: { in: atRiskIds }, email: { not: null } },
+      where: { id: { in: atRiskIds } },
       select: { id: true, name: true, email: true },
     });
 
