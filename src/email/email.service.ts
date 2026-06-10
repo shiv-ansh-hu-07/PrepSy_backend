@@ -113,4 +113,72 @@ export class EmailService {
       `,
     });
   }
+
+  async sendStreakRescueEmail(
+    to: string,
+    name: string,
+    streakDays: number,
+  ) {
+    await this.sendEmail({
+      to,
+      subject: `Your ${streakDays}-day streak dies tonight 🔥`,
+      html: `
+        <div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fafafa;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 12px">Hey ${name || 'there'} 👋</h2>
+          <p style="color:#4a5a85;font-size:16px;line-height:1.6;margin:0 0 20px">
+            You've built a <strong>${streakDays}-day study streak</strong> on PrepSy — that's real consistency. But you haven't studied yet today.
+          </p>
+          <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:16px 20px;margin:0 0 24px">
+            <p style="color:#c2410c;font-weight:600;margin:0;font-size:15px">
+              ⚠ Your streak resets at midnight. One short session saves it.
+            </p>
+          </div>
+          <a href="${process.env.FRONTEND_URL || 'https://prepsy.app'}" style="display:inline-block;padding:12px 28px;background:#7c3aed;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+            Study now →
+          </a>
+          <p style="color:#9aa4c7;font-size:12px;margin:24px 0 0">Even 15 minutes counts. You've got this.</p>
+        </div>
+      `,
+    });
+  }
+
+  async sendWeeklyReportEmail(
+    to: string,
+    name: string,
+    report: {
+      totalMinutes: number;
+      totalLabel: string;
+      sessionsCompleted: number;
+      bestDayLabel: string;
+      avgFocusScore: number | null;
+      streakDays: number;
+    },
+  ) {
+    const focusLine =
+      report.avgFocusScore !== null
+        ? `<p style="color:#4a5a85;margin:0 0 8px">🎯 Average AI focus score: <strong>${report.avgFocusScore}/100</strong></p>`
+        : '';
+
+    await this.sendEmail({
+      to,
+      subject: `Your PrepSy week: ${report.totalLabel} studied 📊`,
+      html: `
+        <div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fafafa;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 6px">This week on PrepSy</h2>
+          <p style="color:#6b78a0;margin:0 0 24px;font-size:14px">Weekly summary for ${name || 'you'}</p>
+          <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:20px 24px;margin:0 0 20px">
+            <p style="color:#4a5a85;margin:0 0 8px">⏱ Total study time: <strong>${report.totalLabel}</strong></p>
+            <p style="color:#4a5a85;margin:0 0 8px">✅ Sessions completed: <strong>${report.sessionsCompleted}</strong></p>
+            <p style="color:#4a5a85;margin:0 0 8px">📅 Best day: <strong>${report.bestDayLabel}</strong></p>
+            ${focusLine}
+            <p style="color:#4a5a85;margin:0">🔥 Current streak: <strong>${report.streakDays} day${report.streakDays === 1 ? '' : 's'}</strong></p>
+          </div>
+          <a href="${process.env.FRONTEND_URL || 'https://prepsy.app'}" style="display:inline-block;padding:12px 28px;background:#7c3aed;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+            Keep the momentum →
+          </a>
+          <p style="color:#9aa4c7;font-size:12px;margin:24px 0 0">See you next week 👋</p>
+        </div>
+      `,
+    });
+  }
 }

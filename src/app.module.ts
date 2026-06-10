@@ -12,6 +12,7 @@ import { CommunityModule } from './community/community.module';
 import { PresenceModule } from './presence/presence.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
     PresenceModule,
     ProfilesModule,
     FocusAnalyticsModule,
+    NotificationsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController, LivekitController],
