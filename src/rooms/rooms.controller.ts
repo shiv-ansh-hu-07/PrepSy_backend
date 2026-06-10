@@ -43,6 +43,7 @@ export class RoomsController {
     @Body('timezone') timezone?: string,
     @Body('femaleOnly') femaleOnly?: boolean,
     @Body('preferredLanguages') preferredLanguages?: string[],
+    @Body('collaborationStyle') collaborationStyle?: string,
   ) {
     return this.roomsService.createRoom(
       name,
@@ -60,6 +61,7 @@ export class RoomsController {
       timezone,
       femaleOnly,
       preferredLanguages,
+      collaborationStyle,
     );
   }
 

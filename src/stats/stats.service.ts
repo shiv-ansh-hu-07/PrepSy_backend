@@ -129,7 +129,7 @@ export class StatsService {
     const now = new Date();
     const timeZone = this.normalizeTimeZone(this.attendanceTimeZone);
 
-    const [user, attendance, memberships] = await Promise.all([
+    const [user, attendance, memberships, userProfile] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
         select: {
@@ -169,6 +169,10 @@ export class StatsService {
         orderBy: {
           joinedAt: 'desc',
         },
+      }),
+      this.prisma.userProfile.findUnique({
+        where: { userId },
+        select: { dailyStudyGoalMinutes: true },
       }),
     ]);
 
@@ -254,6 +258,7 @@ export class StatsService {
           bestStreakDays,
           studiedDaysThisWeek,
           consistencyScore: Math.round((studiedDaysThisWeek / 7) * 100),
+          dailyStudyGoalMinutes: userProfile?.dailyStudyGoalMinutes ?? 0,
         },
         heatmap: {
           month: `${this.getDatePartsInTimeZone(now, timeZone).year}-${String(

@@ -15,6 +15,7 @@ type ProfileWriteData = Omit<
 type ParsedProfileInput = {
   fullName: string | null;
   age: number | null;
+  dailyStudyGoalMinutes: number;
   isDiscoverable: boolean;
 } & Record<(typeof textFields)[number], string | null> &
   Record<(typeof arrayFields)[number], string[]>;
@@ -213,6 +214,7 @@ export class ProfilesService {
     const parsed = {
       fullName: this.cleanText(input.fullName, 90),
       age: this.cleanAge(input.age),
+      dailyStudyGoalMinutes: this.cleanGoalMinutes(input.dailyStudyGoalMinutes),
       isDiscoverable:
         typeof input.isDiscoverable === 'boolean' ? input.isDiscoverable : true,
       ...Object.fromEntries(
@@ -256,6 +258,7 @@ export class ProfilesService {
       experienceLevel: input.experienceLevel,
       workMode: input.workMode,
       collaborationPreference: input.collaborationPreference,
+      dailyStudyGoalMinutes: input.dailyStudyGoalMinutes,
       portfolioUrl: input.portfolioUrl,
       linkedinUrl: input.linkedinUrl,
       githubUrl: input.githubUrl,
@@ -298,6 +301,7 @@ export class ProfilesService {
       experienceLevel: string | null;
       workMode: string | null;
       collaborationPreference: string | null;
+      dailyStudyGoalMinutes: number | null;
       portfolioUrl: string | null;
       linkedinUrl: string | null;
       githubUrl: string | null;
@@ -338,6 +342,7 @@ export class ProfilesService {
       experienceLevel: profile?.experienceLevel || '',
       workMode: profile?.workMode || '',
       collaborationPreference: profile?.collaborationPreference || '',
+      dailyStudyGoalMinutes: profile?.dailyStudyGoalMinutes ?? 0,
       portfolioUrl: profile?.portfolioUrl || '',
       linkedinUrl: profile?.linkedinUrl || '',
       githubUrl: profile?.githubUrl || '',
@@ -448,6 +453,13 @@ export class ProfilesService {
           .slice(0, 16),
       ),
     );
+  }
+
+  private cleanGoalMinutes(value: unknown) {
+    if (value === null || value === undefined || value === '') return 0;
+    const n = Number(value);
+    if (isNaN(n) || !Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(720, Math.round(n)));
   }
 
   private cleanAge(value: unknown) {

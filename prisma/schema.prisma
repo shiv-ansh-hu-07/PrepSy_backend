@@ -69,6 +69,7 @@ model UserProfile {
   workMode        String?
 
   collaborationPreference String?
+  dailyStudyGoalMinutes   Int?    @default(0)
   portfolioUrl String?
   linkedinUrl  String?
   githubUrl    String?
@@ -105,8 +106,9 @@ model Room {
   recurrenceType     String?   
   recurrenceEndDate  DateTime?
 
-  femaleOnly         Boolean  @default(false)
-  preferredLanguages String[] @default([])
+  femaleOnly            Boolean  @default(false)
+  preferredLanguages    String[] @default([])
+  collaborationStyle    String   @default("quiet-focus")
 
   remindersent Boolean @default(false)
 

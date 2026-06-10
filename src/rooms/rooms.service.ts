@@ -423,6 +423,7 @@ export class RoomsService {
     timezone?: string,
     femaleOnly?: boolean,
     preferredLanguages?: string[],
+    collaborationStyle?: string,
   ) {
     if (!name?.trim()) {
       throw new BadRequestException('Room name is required');
@@ -485,6 +486,7 @@ export class RoomsService {
           preferredLanguages: Array.isArray(preferredLanguages)
             ? preferredLanguages.filter(Boolean)
             : [],
+          collaborationStyle: collaborationStyle || 'quiet-focus',
           remindersent: false,
         },
       });

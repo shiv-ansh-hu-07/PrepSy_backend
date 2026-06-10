@@ -1,0 +1,2 @@
+ALTER TABLE "Room" ADD COLUMN IF NOT EXISTS "collaborationStyle" TEXT NOT NULL DEFAULT 'quiet-focus';
+ALTER TABLE "UserProfile" ADD COLUMN IF NOT EXISTS "dailyStudyGoalMinutes" INTEGER NOT NULL DEFAULT 0;

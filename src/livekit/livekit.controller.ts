@@ -60,6 +60,8 @@ export class LivekitController {
         roomId: true,
         name: true,
         startTime: true,
+        durationMinutes: true,
+        collaborationStyle: true,
       },
     });
 
@@ -130,6 +132,8 @@ export class LivekitController {
       token: jwt,
       url: process.env.LIVEKIT_WS_URL,
       roomName: roomRecord.name,
+      durationMinutes: roomRecord.durationMinutes ?? 90,
+      collaborationStyle: roomRecord.collaborationStyle ?? 'quiet-focus',
     });
   }
 }
