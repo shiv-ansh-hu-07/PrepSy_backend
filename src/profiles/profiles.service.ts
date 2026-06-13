@@ -17,6 +17,7 @@ type ParsedProfileInput = {
   age: number | null;
   dailyStudyGoalMinutes: number;
   isDiscoverable: boolean;
+  aiMonitorConsent: boolean;
 } & Record<(typeof textFields)[number], string | null> &
   Record<(typeof arrayFields)[number], string[]>;
 
@@ -217,6 +218,8 @@ export class ProfilesService {
       dailyStudyGoalMinutes: this.cleanGoalMinutes(input.dailyStudyGoalMinutes),
       isDiscoverable:
         typeof input.isDiscoverable === 'boolean' ? input.isDiscoverable : true,
+      aiMonitorConsent:
+        typeof input.aiMonitorConsent === 'boolean' ? input.aiMonitorConsent : false,
       ...Object.fromEntries(
         textFields.map((field) => [field, this.cleanText(input[field], 220)]),
       ),
@@ -263,6 +266,7 @@ export class ProfilesService {
       linkedinUrl: input.linkedinUrl,
       githubUrl: input.githubUrl,
       isDiscoverable: input.isDiscoverable,
+      aiMonitorConsent: input.aiMonitorConsent,
     };
 
     return data;
@@ -306,6 +310,7 @@ export class ProfilesService {
       linkedinUrl: string | null;
       githubUrl: string | null;
       isDiscoverable: boolean;
+      aiMonitorConsent: boolean;
       updatedAt: Date;
     };
   }) {
@@ -347,6 +352,7 @@ export class ProfilesService {
       linkedinUrl: profile?.linkedinUrl || '',
       githubUrl: profile?.githubUrl || '',
       isDiscoverable: profile?.isDiscoverable ?? true,
+      aiMonitorConsent: profile?.aiMonitorConsent ?? false,
       updatedAt: profile?.updatedAt?.toISOString() || null,
     };
 

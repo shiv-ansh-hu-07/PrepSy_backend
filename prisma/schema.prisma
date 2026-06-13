@@ -74,6 +74,7 @@ model UserProfile {
   linkedinUrl  String?
   githubUrl    String?
   isDiscoverable Boolean @default(true)
+  aiMonitorConsent Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
