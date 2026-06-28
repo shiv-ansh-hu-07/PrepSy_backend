@@ -424,6 +424,8 @@ export class RoomsService {
     femaleOnly?: boolean,
     preferredLanguages?: string[],
     collaborationStyle?: string,
+    youtubeVideoId?: string,
+    youtubePlaylistId?: string,
   ) {
     if (!name?.trim()) {
       throw new BadRequestException('Room name is required');
@@ -487,6 +489,8 @@ export class RoomsService {
             ? preferredLanguages.filter(Boolean)
             : [],
           collaborationStyle: collaborationStyle || 'quiet-focus',
+          youtubeVideoId: youtubeVideoId || null,
+          youtubePlaylistId: youtubePlaylistId || null,
           remindersent: false,
         },
       });

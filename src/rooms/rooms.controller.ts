@@ -44,6 +44,8 @@ export class RoomsController {
     @Body('femaleOnly') femaleOnly?: boolean,
     @Body('preferredLanguages') preferredLanguages?: string[],
     @Body('collaborationStyle') collaborationStyle?: string,
+    @Body('youtubeVideoId') youtubeVideoId?: string,
+    @Body('youtubePlaylistId') youtubePlaylistId?: string,
   ) {
     return this.roomsService.createRoom(
       name,
@@ -62,6 +64,8 @@ export class RoomsController {
       femaleOnly,
       preferredLanguages,
       collaborationStyle,
+      youtubeVideoId,
+      youtubePlaylistId,
     );
   }
 

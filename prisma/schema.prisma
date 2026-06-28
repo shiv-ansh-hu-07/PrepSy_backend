@@ -111,6 +111,9 @@ model Room {
   preferredLanguages    String[] @default([])
   collaborationStyle    String   @default("quiet-focus")
 
+  youtubeVideoId    String?
+  youtubePlaylistId String?
+
   remindersent Boolean @default(false)
 
   members  RoomMember[]

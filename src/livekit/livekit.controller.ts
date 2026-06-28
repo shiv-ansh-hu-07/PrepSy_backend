@@ -62,6 +62,8 @@ export class LivekitController {
         startTime: true,
         durationMinutes: true,
         collaborationStyle: true,
+        youtubeVideoId: true,
+        youtubePlaylistId: true,
       },
     });
 
@@ -134,6 +136,8 @@ export class LivekitController {
       roomName: roomRecord.name,
       durationMinutes: roomRecord.durationMinutes ?? 90,
       collaborationStyle: roomRecord.collaborationStyle ?? 'quiet-focus',
+      youtubeVideoId: roomRecord.youtubeVideoId ?? null,
+      youtubePlaylistId: roomRecord.youtubePlaylistId ?? null,
     });
   }
 }
