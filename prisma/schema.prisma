@@ -29,6 +29,11 @@ model User {
   profile UserProfile?
   focusSessions    FocusSession[]
 
+  createdCohorts    Cohort[]         @relation("UserCreatedCohorts")
+  cohortMemberships CohortMember[]   @relation("UserCohorts")
+  discussions       DiscussionPost[] @relation("UserDiscussions")
+  quizAttempts      QuizAttempt[]    @relation("UserQuizAttempts")
+
   @@unique([provider, providerId])
 }
 
@@ -200,6 +205,122 @@ model FocusSession {
 
   @@index([userId, sessionDate(sort: Desc)])
   @@index([roomId, sessionDate(sort: Desc)])
+}
+
+model Playlist {
+  id           String   @id @default(cuid())
+  ytPlaylistId String   @unique
+  title        String
+  channelTitle String?
+  thumbnailUrl String?
+  videoCount   Int      @default(0)
+  cachedAt     DateTime @default(now())
+
+  videos  PlaylistVideo[]
+  plan    PlaylistPlan?
+  cohorts Cohort[]
+}
+
+model PlaylistVideo {
+  id           String  @id @default(cuid())
+  playlistId   String
+  ytVideoId    String
+  title        String
+  description  String?
+  thumbnailUrl String?
+  position     Int
+  durationSec  Int?
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  @@index([playlistId])
+}
+
+model PlaylistPlan {
+  id             String   @id @default(cuid())
+  playlistId     String   @unique
+  difficulty     String
+  estimatedHours Float
+  curriculum     Json
+  roadmap        Json
+  generatedAt    DateTime @default(now())
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+}
+
+model Cohort {
+  id          String   @id @default(cuid())
+  playlistId  String
+  name        String
+  createdById String
+  maxSize     Int      @default(10)
+  createdAt   DateTime @default(now())
+
+  playlist     Playlist         @relation(fields: [playlistId], references: [id])
+  createdBy    User             @relation("UserCreatedCohorts", fields: [createdById], references: [id])
+  members      CohortMember[]
+  sessions     StudySession[]
+  discussions  DiscussionPost[]
+  quizAttempts QuizAttempt[]
+
+  @@index([playlistId])
+}
+
+model CohortMember {
+  id       String   @id @default(cuid())
+  cohortId String
+  userId   String
+  joinedAt DateTime @default(now())
+  progress Json     @default("{}")
+
+  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  user   User   @relation("UserCohorts", fields: [userId], references: [id])
+
+  @@unique([cohortId, userId])
+}
+
+model StudySession {
+  id          String   @id @default(cuid())
+  cohortId    String
+  topic       String
+  scheduledAt DateTime
+  roomId      String?
+  createdAt   DateTime @default(now())
+
+  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+
+  @@index([cohortId])
+}
+
+model DiscussionPost {
+  id        String   @id @default(cuid())
+  cohortId  String
+  authorId  String
+  content   String
+  parentId  String?
+  createdAt DateTime @default(now())
+
+  cohort  Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  author  User             @relation("UserDiscussions", fields: [authorId], references: [id])
+  parent  DiscussionPost?  @relation("Replies", fields: [parentId], references: [id])
+  replies DiscussionPost[] @relation("Replies")
+
+  @@index([cohortId, createdAt])
+}
+
+model QuizAttempt {
+  id          String   @id @default(cuid())
+  cohortId    String
+  userId      String
+  questions   Json
+  answers     Json
+  score       Int
+  completedAt DateTime @default(now())
+
+  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  user   User   @relation("UserQuizAttempts", fields: [userId], references: [id])
+
+  @@index([cohortId, userId])
 }
 
 model CommunityPost {

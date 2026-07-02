@@ -13,6 +13,8 @@ import { PresenceModule } from './presence/presence.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PlaylistsModule } from './playlists/playlists.module';
+import { CohortsModule } from './cohorts/cohorts.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { NotificationsModule } from './notifications/notifications.module';
     ProfilesModule,
     FocusAnalyticsModule,
     NotificationsModule,
+    PlaylistsModule,
+    CohortsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController, LivekitController],
