@@ -9,6 +9,7 @@ describe('ProfilesService', () => {
       update: jest.Mock;
     };
     userProfile: {
+      findUnique: jest.Mock;
       upsert: jest.Mock;
     };
     $transaction: jest.Mock;
@@ -21,6 +22,7 @@ describe('ProfilesService', () => {
         update: jest.fn(),
       },
       userProfile: {
+        findUnique: jest.fn(),
         upsert: jest.fn(),
       },
       $transaction: jest.fn(),
@@ -33,8 +35,8 @@ describe('ProfilesService', () => {
       id: 'user-1',
       email: 'learner@example.com',
       name: '',
-      profile: null,
     });
+    prisma.userProfile.findUnique.mockResolvedValue(null);
 
     await expect(service.getMyProfile('user-1')).resolves.toMatchObject({
       profile: {
@@ -64,42 +66,42 @@ describe('ProfilesService', () => {
         id: 'user-1',
         email: 'learner@example.com',
         name: 'Shivanshu Tiwari',
-        profile: {
-          username: 'shivanshu',
-          phone: null,
-          avatarUrl: null,
-          bio: 'Focused learner',
-          age: 21,
-          gender: 'man',
-          goals: ['DSA', 'placements'],
-          interests: ['system design'],
-          skills: ['Java'],
-          languages: ['English'],
-          examTargets: [],
-          lookingFor: ['project team'],
-          availability: ['weekends'],
-          city: 'New Delhi',
-          state: 'Delhi',
-          country: 'India',
-          timezone: 'Asia/Kolkata',
-          institutionType: 'student',
-          institutionName: 'IIT Delhi',
-          degree: 'B.Tech',
-          branch: 'Computer Science',
-          semester: '4th Semester',
-          expectedGraduation: 'May 2026',
-          company: null,
-          role: null,
-          experienceLevel: null,
-          workMode: null,
-          collaborationPreference: 'project-based',
-          portfolioUrl: null,
-          linkedinUrl: null,
-          githubUrl: null,
-          isDiscoverable: true,
-          updatedAt: new Date('2026-06-04T00:00:00.000Z'),
-        },
       });
+    prisma.userProfile.findUnique.mockResolvedValue({
+      username: 'shivanshu',
+      phone: null,
+      avatarUrl: null,
+      bio: 'Focused learner',
+      age: 21,
+      gender: 'man',
+      goals: ['DSA', 'placements'],
+      interests: ['system design'],
+      skills: ['Java'],
+      languages: ['English'],
+      examTargets: [],
+      lookingFor: ['project team'],
+      availability: ['weekends'],
+      city: 'New Delhi',
+      state: 'Delhi',
+      country: 'India',
+      timezone: 'Asia/Kolkata',
+      institutionType: 'college',
+      institutionName: 'IIT Delhi',
+      degree: 'B.Tech',
+      branch: 'Computer Science',
+      semester: '4th Semester',
+      expectedGraduation: 'May 2026',
+      company: null,
+      role: null,
+      experienceLevel: null,
+      workMode: null,
+      collaborationPreference: 'project-based',
+      portfolioUrl: null,
+      linkedinUrl: null,
+      githubUrl: null,
+      isDiscoverable: true,
+      updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+    });
     prisma.user.update.mockResolvedValue({ id: 'user-1' });
     prisma.userProfile.upsert.mockResolvedValue({});
     prisma.$transaction.mockResolvedValue([{ id: 'user-1' }, {}]);
@@ -113,7 +115,7 @@ describe('ProfilesService', () => {
       goals: ['DSA', 'placements'],
       interests: ['system design'],
       city: 'New Delhi',
-      institutionType: 'student',
+      institutionType: 'college',
       institutionName: 'IIT Delhi',
       lookingFor: ['project team'],
       availability: ['weekends'],
@@ -126,14 +128,14 @@ describe('ProfilesService', () => {
           userId: 'user-1',
           goals: ['DSA', 'placements'],
           city: 'New Delhi',
-          institutionType: 'student',
+          institutionType: 'college',
         }),
       }),
     );
     expect(result.profile.completion.requiredComplete).toBe(true);
     expect(result.profile.matchingSignals).toMatchObject({
       city: 'New Delhi',
-      institutionType: 'student',
+      institutionType: 'college',
       institutionName: 'IIT Delhi',
       goals: ['DSA', 'placements'],
     });

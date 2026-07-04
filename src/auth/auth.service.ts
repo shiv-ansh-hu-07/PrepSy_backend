@@ -20,6 +20,9 @@ type AuthUserRecord = Pick<
   | 'lastLoginAt'
 > & {
   streakDisabled: boolean;
+  profile?: {
+    avatarUrl: string | null;
+  } | null;
 };
 
 const authUserBaseSelect = {
@@ -63,18 +66,20 @@ export class AuthService {
 
 
   private async findUserByEmail(email: string): Promise<AuthUserRecord | null> {
-    return this.prisma.user.findUnique({ where: { email } });
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    return this.withProfileAvatar(user);
   }
 
   private async findUserById(userId: string): Promise<AuthUserRecord | null> {
-  return this.prisma.user.findUnique({ where: { id: userId } });
+  const user = await this.prisma.user.findUnique({ where: { id: userId } });
+  return this.withProfileAvatar(user);
 }
 
   private async findOauthUser(
   provider: 'google',
   profile: { email: string; providerId: string; name?: string },
 ): Promise<AuthUserRecord | null> {
-  return this.prisma.user.findFirst({
+  const user = await this.prisma.user.findFirst({
     where: {
       OR: [
         { provider, providerId: profile.providerId },
@@ -82,6 +87,35 @@ export class AuthService {
       ],
     },
   });
+  return this.withProfileAvatar(user);
+}
+
+private async withProfileAvatar(
+  user: (User & { streakDisabled: boolean }) | null,
+): Promise<AuthUserRecord | null> {
+  if (!user) {
+    return null;
+  }
+
+  try {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId: user.id },
+      select: { avatarUrl: true },
+    });
+    return { ...user, profile };
+  } catch (error) {
+    if (this.isProfileStorageUnavailable(error)) {
+      return { ...user, profile: null };
+    }
+    throw error;
+  }
+}
+
+private isProfileStorageUnavailable(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    ['P2021', 'P2022'].includes(error.code)
+  );
 }
 
 private async recordDailyLogin(
@@ -155,7 +189,7 @@ private async createOauthUser(
   provider: 'google',
   profile: { email: string; providerId: string; name?: string },
 ): Promise<AuthUserRecord> {
-  return this.prisma.user.create({
+  const user = await this.prisma.user.create({
     data: {
       email: profile.email,
       name: profile.name ?? '',
@@ -164,6 +198,7 @@ private async createOauthUser(
       password: null,
     },
   });
+  return { ...user, profile: null };
 }
 
   // =========================
@@ -221,6 +256,7 @@ private async createOauthUser(
         email: user.email,
         name: user.name,
         attendanceStreak: user.loginStreak,
+        avatarUrl: user.profile?.avatarUrl || null,
       },
     };
   }
@@ -246,6 +282,7 @@ private async createOauthUser(
     email: existingUser.email,
     name: existingUser.name,
     attendanceStreak: existingUser.loginStreak, 
+    avatarUrl: existingUser.profile?.avatarUrl || null,
   };
 }
 
@@ -277,6 +314,7 @@ private async createOauthUser(
         email: user.email,
         name: user.name,
         attendanceStreak: user.loginStreak,
+        avatarUrl: user.profile?.avatarUrl || null,
       },
     };
   }

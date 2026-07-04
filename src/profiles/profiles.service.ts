@@ -76,16 +76,7 @@ export class ProfilesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getMyProfile(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        profile: true,
-      },
-    });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
+    const user = await this.getUserWithProfile(userId);
 
     return {
       profile: this.serializeProfile(user),
@@ -123,39 +114,95 @@ export class ProfilesService {
 
     const profileData = this.toProfileUpdateInput(input);
 
-    const [user] = await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          name: input.fullName,
-        },
-        include: {
-          profile: true,
-        },
-      }),
-      this.prisma.userProfile.upsert({
-        where: { userId },
-        create: {
-          userId,
-          ...profileData,
-        },
-        update: profileData,
-      }),
-    ]);
+    try {
+      await this.prisma.$transaction([
+        this.prisma.user.update({
+          where: { id: userId },
+          data: {
+            name: input.fullName,
+          },
+          select: {
+            id: true,
+          },
+        }),
+        this.prisma.userProfile.upsert({
+          where: { userId },
+          create: {
+            userId,
+            ...profileData,
+          },
+          update: profileData,
+        }),
+      ]);
+    } catch (error) {
+      if (this.isUniqueProfileValue(error)) {
+        throw new BadRequestException('This username is already taken.');
+      }
 
-    const reloadedUser = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      include: { profile: true },
-    });
+      if (this.isProfileStorageUnavailable(error)) {
+        throw new BadRequestException(
+          'Profile storage is still being prepared. Please run the latest database migration and try again.',
+        );
+      }
 
-    if (!reloadedUser) {
-      throw new NotFoundException('User not found');
+      throw error;
     }
+
+    const reloadedUser = await this.getUserWithProfile(userId);
 
     return {
       profile: this.serializeProfile(reloadedUser),
       message: 'Profile saved successfully.',
     };
+  }
+
+  private async getUserWithProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    try {
+      const profile = await this.prisma.userProfile.findUnique({
+        where: { userId },
+      });
+
+      return {
+        ...user,
+        profile,
+      };
+    } catch (error) {
+      if (this.isProfileStorageUnavailable(error)) {
+        return {
+          ...user,
+          profile: null,
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  private isProfileStorageUnavailable(error: unknown) {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      ['P2021', 'P2022'].includes(error.code)
+    );
+  }
+
+  private isUniqueProfileValue(error: unknown) {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    );
   }
 
   private parseInput(body: unknown) {
