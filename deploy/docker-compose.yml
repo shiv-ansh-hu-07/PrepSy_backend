@@ -1,0 +1,35 @@
+# Runs on the EC2 instance at /home/ec2-user/prepsy/docker-compose.yml
+#
+# Two containers:
+#   app   - the PrepSy backend image pulled from ECR
+#   caddy - reverse proxy that terminates HTTPS (auto Let's Encrypt cert)
+#           and forwards traffic (including WebSocket upgrades) to the app.
+#
+# Static config (APP_IMAGE) comes from the sibling `.env` file (compose reads
+# it automatically for ${...} interpolation). App secrets come from
+# `secrets.env`, generated from SSM Parameter Store by ./refresh-env.sh.
+
+services:
+  app:
+    image: ${APP_IMAGE}
+    restart: unless-stopped
+    env_file: secrets.env
+    expose:
+      - '5000'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy_data:
+  caddy_config:

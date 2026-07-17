@@ -42,6 +42,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# generated on the server from SSM, never commit
+deploy/secrets.env
+
 # temp directory
 .temp
 .tmp

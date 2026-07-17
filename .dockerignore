@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.github
+uploads
+test
+*.spec.ts
+.env
+.env.*
+!.env.example
+npm-debug.log
+Dockerfile
+.dockerignore
+README.md
