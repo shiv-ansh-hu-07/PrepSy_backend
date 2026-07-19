@@ -15,6 +15,7 @@ import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PlaylistsModule } from './playlists/playlists.module';
 import { CohortsModule } from './cohorts/cohorts.module';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
@@ -32,7 +33,7 @@ import { CohortsModule } from './cohorts/cohorts.module';
     CohortsModule,
     ScheduleModule.forRoot(),
   ],
-  controllers: [AppController, LivekitController],
+  controllers: [AppController, LivekitController, HealthController],
   providers: [AppService],
 })
 export class AppModule {}

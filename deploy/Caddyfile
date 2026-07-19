@@ -1,0 +1,9 @@
+# Replace api.prepsy.in with your real API subdomain (must have an A record
+# pointing at this instance's Elastic IP before Caddy can issue a certificate).
+#
+# Caddy automatically obtains and renews a free Let's Encrypt TLS certificate
+# and proxies HTTPS + WebSocket traffic to the app container on port 5000.
+
+api.prepsy.in {
+	reverse_proxy app:5000
+}

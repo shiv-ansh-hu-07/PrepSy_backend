@@ -1,21 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { join } from 'path';
-import { mkdirSync } from 'fs';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-
-  // Ensure uploads directory exists on startup
-  try {
-    mkdirSync(join(process.cwd(), 'uploads', 'avatars'), { recursive: true });
-  } catch {
-    // Directory already exists — safe to ignore
-  }
-
-  // Serve uploaded files statically at /uploads/*
-  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads' });
 
   app.enableCors({
     origin: [

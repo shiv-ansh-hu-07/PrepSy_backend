@@ -12,18 +12,19 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname, join } from 'path';
-import { mkdirSync } from 'fs';
-import { v4 as uuidv4 } from 'uuid';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import type { RequestWithUser } from '../auth/auth-user.interface';
 import { ProfilesService } from './profiles.service';
+import { S3Service } from '../s3/s3.service';
 
 @Controller('profiles')
 @UseGuards(JwtAuthGuard)
 export class ProfilesController {
-  constructor(private readonly profilesService: ProfilesService) {}
+  constructor(
+    private readonly profilesService: ProfilesService,
+    private readonly s3Service: S3Service,
+  ) {}
 
   private getUserId(req: RequestWithUser) {
     const userId = req?.user?.id || req?.user?.sub;
@@ -46,17 +47,7 @@ export class ProfilesController {
   @Post('avatar')
   @UseInterceptors(
     FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, cb) => {
-          const dir = join(process.cwd(), 'uploads', 'avatars');
-          mkdirSync(dir, { recursive: true });
-          cb(null, dir);
-        },
-        filename: (req, file, cb) => {
-          const ext = extname(file.originalname).toLowerCase() || '.jpg';
-          cb(null, `${uuidv4()}${ext}`);
-        },
-      }),
+      storage: memoryStorage(),
       limits: { fileSize: 3 * 1024 * 1024 },
       fileFilter: (req, file, cb) => {
         if (/^image\/(jpeg|jpg|png|gif|webp)$/i.test(file.mimetype)) {
@@ -72,14 +63,22 @@ export class ProfilesController {
       },
     }),
   )
-  uploadAvatar(
+  async uploadAvatar(
     @Req() req: RequestWithUser,
     @UploadedFile() file: Express.Multer.File,
   ) {
-    this.getUserId(req);
+    const userId = this.getUserId(req);
     if (!file) {
       throw new BadRequestException('No image file provided.');
     }
-    return { avatarUrl: `/uploads/avatars/${file.filename}` };
+
+    const avatarUrl = await this.s3Service.uploadAvatar(
+      userId,
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
+
+    return { avatarUrl };
   }
 }
