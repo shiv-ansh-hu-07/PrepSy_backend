@@ -87,6 +87,34 @@ export class ProfilesService {
     }
   }
 
+  async setAvatarUrl(userId: string, avatarUrl: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    try {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        create: { userId, avatarUrl },
+        update: { avatarUrl },
+      });
+    } catch (error) {
+      if (this.isProfileStorageUnavailable(error)) {
+        throw new BadRequestException(
+          'Profile storage is still being prepared. Please run the latest database migration and try again.',
+        );
+      }
+      throw new BadRequestException('Could not save your avatar. Please try again.');
+    }
+
+    return { avatarUrl };
+  }
+
   async updateMyProfile(userId: string, body: unknown) {
     const input = this.parseInput(body);
 
@@ -121,6 +149,14 @@ export class ProfilesService {
     }
 
     const profileData = this.toProfileUpdateInput(input);
+
+    // Preserve an existing avatar when the incoming payload doesn't carry one.
+    const providedAvatarUrl = this.isRecord(body)
+      ? this.cleanText((body as Record<string, unknown>).avatarUrl, 220)
+      : null;
+    if (!providedAvatarUrl) {
+      delete (profileData as Record<string, unknown>).avatarUrl;
+    }
 
     try {
       await this.prisma.$transaction(async (tx) => {

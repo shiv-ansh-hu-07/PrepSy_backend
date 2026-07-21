@@ -79,6 +79,9 @@ export class ProfilesController {
       file.originalname,
     );
 
+    // Persist the URL to the profile so it survives a page refresh.
+    await this.profilesService.setAvatarUrl(userId, avatarUrl);
+
     return { avatarUrl };
   }
 }
