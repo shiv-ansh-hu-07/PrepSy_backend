@@ -66,50 +66,58 @@ export class AuthService {
 
 
   private async findUserByEmail(email: string): Promise<AuthUserRecord | null> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    return this.withProfileAvatar(user);
+    return this.findUserWithProfile({ where: { email } });
   }
 
   private async findUserById(userId: string): Promise<AuthUserRecord | null> {
-  const user = await this.prisma.user.findUnique({ where: { id: userId } });
-  return this.withProfileAvatar(user);
-}
+    return this.findUserWithProfile({ where: { id: userId } });
+  }
 
   private async findOauthUser(
-  provider: 'google',
-  profile: { email: string; providerId: string; name?: string },
-): Promise<AuthUserRecord | null> {
-  const user = await this.prisma.user.findFirst({
-    where: {
-      OR: [
-        { provider, providerId: profile.providerId },
-        { email: profile.email },
-      ],
-    },
-  });
-  return this.withProfileAvatar(user);
-}
-
-private async withProfileAvatar(
-  user: (User & { streakDisabled: boolean }) | null,
-): Promise<AuthUserRecord | null> {
-  if (!user) {
-    return null;
-  }
-
-  try {
-    const profile = await this.prisma.userProfile.findUnique({
-      where: { userId: user.id },
-      select: { avatarUrl: true },
+    provider: 'google',
+    profile: { email: string; providerId: string; name?: string },
+  ): Promise<AuthUserRecord | null> {
+    return this.findUserWithProfile({
+      where: {
+        OR: [
+          { provider, providerId: profile.providerId },
+          { email: profile.email },
+        ],
+      },
+      multiple: true,
     });
-    return { ...user, profile };
-  } catch (error) {
-    if (this.isProfileStorageUnavailable(error)) {
-      return { ...user, profile: null };
-    }
-    throw error;
   }
-}
+
+  // Fetches the user and their avatar in a single round trip (a join)
+  // instead of two sequential queries — this sits on the login and
+  // /auth/me hot paths, so the extra round trip was pure added latency.
+  private async findUserWithProfile(options: {
+    where: Prisma.UserWhereUniqueInput | Prisma.UserWhereInput;
+    multiple?: boolean;
+  }): Promise<AuthUserRecord | null> {
+    const { where, multiple } = options;
+    const include = { profile: { select: { avatarUrl: true } } } as const;
+
+    try {
+      return multiple
+        ? await this.prisma.user.findFirst({ where, include })
+        : await this.prisma.user.findUnique({
+            where: where as Prisma.UserWhereUniqueInput,
+            include,
+          });
+    } catch (error) {
+      if (!this.isProfileStorageUnavailable(error)) {
+        throw error;
+      }
+
+      const user = multiple
+        ? await this.prisma.user.findFirst({ where })
+        : await this.prisma.user.findUnique({
+            where: where as Prisma.UserWhereUniqueInput,
+          });
+      return user ? { ...user, profile: null } : null;
+    }
+  }
 
 private isProfileStorageUnavailable(error: unknown) {
   return (

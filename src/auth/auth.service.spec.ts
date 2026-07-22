@@ -71,6 +71,7 @@ describe('AuthService', () => {
 
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { email: 'test@prepsy.in' },
+      include: { profile: { select: { avatarUrl: true } } },
     });
     expect(prisma.user.create).toHaveBeenCalled();
     expect(result).toEqual({
@@ -125,6 +126,7 @@ describe('AuthService', () => {
         email: 'google@prepsy.in',
         name: 'Google User',
         attendanceStreak: 0,
+        avatarUrl: null,
       },
     });
   });
