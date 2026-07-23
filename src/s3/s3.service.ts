@@ -14,11 +14,13 @@ export class S3Service {
   private readonly client: S3Client;
   private readonly bucket = process.env.S3_BUCKET_NAME;
   private readonly cloudfrontDomain = process.env.CLOUDFRONT_DOMAIN;
+  private readonly region =
+    process.env.S3_REGION || process.env.AWS_REGION;
 
   constructor() {
     // Credentials are resolved from the ECS/EC2 task IAM role via the default
     // AWS provider chain — do not pass access keys here.
-    this.client = new S3Client({ region: process.env.AWS_REGION });
+    this.client = new S3Client({ region: this.region });
   }
 
   /**
@@ -62,6 +64,6 @@ export class S3Service {
       return `https://${this.cloudfrontDomain}/${key}`;
     }
 
-    return `https://${this.bucket}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
   }
 }
