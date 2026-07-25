@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
+import { Public } from '../auth/public.decorator';
 import { Delete, Param } from '@nestjs/common';
 import type { RequestWithUser } from '../auth/auth-user.interface';
 
@@ -74,6 +75,7 @@ export class RoomsController {
     return this.roomsService.getRooms();
   }
 
+  @Public()
   @Get('public')
   getPublicRooms() {
     return this.roomsService.getPublicRooms();
