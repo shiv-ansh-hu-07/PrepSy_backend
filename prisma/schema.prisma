@@ -118,6 +118,8 @@ model Room {
 
   youtubeVideoId    String?
   youtubePlaylistId String?
+  videoSummary      String?
+  videoSummaryAt    DateTime?
 
   remindersent Boolean @default(false)
 

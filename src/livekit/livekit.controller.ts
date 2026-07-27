@@ -64,6 +64,7 @@ export class LivekitController {
         collaborationStyle: true,
         youtubeVideoId: true,
         youtubePlaylistId: true,
+        tags: true,
       },
     });
 
@@ -71,8 +72,12 @@ export class LivekitController {
       return res.status(404).json({ error: 'Room not found' });
     }
 
+    const isWatchParty = Boolean(
+      roomRecord.youtubeVideoId || roomRecord.youtubePlaylistId,
+    );
+
     const now = new Date();
-    if (roomRecord.startTime && now < roomRecord.startTime) {
+    if (roomRecord.startTime && now < roomRecord.startTime && !isWatchParty) {
       return res.status(403).json({
         error: 'This classroom has not started yet.',
         startTime: roomRecord.startTime.toISOString(),
@@ -138,6 +143,10 @@ export class LivekitController {
       collaborationStyle: roomRecord.collaborationStyle ?? 'quiet-focus',
       youtubeVideoId: roomRecord.youtubeVideoId ?? null,
       youtubePlaylistId: roomRecord.youtubePlaylistId ?? null,
+      startTime: roomRecord.startTime
+        ? roomRecord.startTime.toISOString()
+        : null,
+      tags: roomRecord.tags ?? [],
     });
   }
 }

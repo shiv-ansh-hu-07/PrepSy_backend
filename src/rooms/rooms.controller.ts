@@ -86,6 +86,12 @@ export class RoomsController {
     return this.roomsService.getMyRooms(this.getUserId(req));
   }
 
+  @Public()
+  @Get(':roomId/video-summary')
+  getVideoSummary(@Param('roomId') roomId: string) {
+    return this.roomsService.getVideoSummary(roomId);
+  }
+
   @Post('join')
   joinRoom(@Body('roomId') roomId: string, @Req() req: RequestWithUser) {
     return this.roomsService.joinRoom(roomId, this.getUserId(req));

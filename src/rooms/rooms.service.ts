@@ -8,9 +8,13 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
 import { RoomServiceClient } from 'livekit-server-sdk';
+import axios from 'axios';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomWithRelations } from './room.types';
 import { EmailService } from '../email/email.service';
+
+const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const YT_API = 'https://www.googleapis.com/youtube/v3';
 
 @Injectable()
 export class RoomsService {
@@ -556,6 +560,71 @@ export class RoomsService {
         rooms.filter((room) => this.shouldShowPublicRoom(room)),
       ),
     };
+  }
+
+  async getVideoSummary(roomId: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      select: {
+        youtubeVideoId: true,
+        videoSummary: true,
+        videoSummaryAt: true,
+        tags: true,
+        description: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    if (room.videoSummary) {
+      return { summary: room.videoSummary, tags: room.tags };
+    }
+
+    if (!room.youtubeVideoId) {
+      return { summary: null, tags: room.tags };
+    }
+
+    const apiKey = process.env.YOUTUBE_API_KEY;
+    if (!apiKey) {
+      this.logger.warn('YOUTUBE_API_KEY not configured, skipping video summary');
+      return { summary: null, tags: room.tags };
+    }
+
+    try {
+      const { data } = await axios.get(`${YT_API}/videos`, {
+        params: { id: room.youtubeVideoId, key: apiKey, part: 'snippet' },
+      });
+      const snippet = data.items?.[0]?.snippet;
+      if (!snippet) {
+        return { summary: null, tags: room.tags };
+      }
+
+      const { data: aiResult } = await axios.post(
+        `${AI_URL}/video-summary`,
+        {
+          title: snippet.title,
+          description: snippet.description || '',
+          channelTitle: snippet.channelTitle || '',
+        },
+        { timeout: 30_000 },
+      );
+
+      const summary: string = aiResult?.summary || '';
+      if (summary) {
+        await this.prisma.room.update({
+          where: { roomId },
+          data: { videoSummary: summary, videoSummaryAt: new Date() },
+        });
+      }
+
+      return { summary: summary || null, tags: room.tags };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.warn(`Video summary generation failed for ${roomId}: ${message}`);
+      return { summary: null, tags: room.tags };
+    }
   }
 
   async searchRoomsByTags(tags: string[]) {
