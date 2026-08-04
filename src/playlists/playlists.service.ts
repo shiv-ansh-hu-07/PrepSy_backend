@@ -5,6 +5,14 @@ import axios from 'axios';
 const YT_API = 'https://www.googleapis.com/youtube/v3';
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
+export interface ScheduleDto {
+  hoursPerDay: number;
+  days: number;
+  speed?: number;
+  multiplier?: number;
+  useLlm?: boolean;
+}
+
 @Injectable()
 export class PlaylistsService {
   constructor(private prisma: PrismaService) {}
@@ -135,6 +143,63 @@ export class PlaylistsService {
     return this.formatResponse(playlist);
   }
 
+  // Build a personalized study schedule for a stored playlist. Unlike analyze(),
+  // this is per-user (depends on their hours/day + deadline) so it is computed on
+  // demand and not cached. Durations aren't stored in the DB, so we fetch them
+  // from YouTube here and pass them to the AI /schedule endpoint.
+  async schedule(id: string, dto: ScheduleDto) {
+    const hoursPerDay = Number(dto.hoursPerDay);
+    const days = Number(dto.days);
+    if (!hoursPerDay || hoursPerDay <= 0) {
+      throw new BadRequestException('hoursPerDay must be a positive number');
+    }
+    if (!days || days <= 0) {
+      throw new BadRequestException('days must be a positive number');
+    }
+
+    const playlist = await this.prisma.playlist.findUnique({
+      where: { id },
+      include: { videos: { orderBy: { position: 'asc' } } },
+    });
+    if (!playlist) throw new BadRequestException('Playlist not found');
+    if (!playlist.videos.length) throw new BadRequestException('Playlist has no videos');
+
+    const apiKey = process.env.YOUTUBE_API_KEY;
+    if (!apiKey) throw new InternalServerErrorException('YOUTUBE_API_KEY not configured');
+
+    const durations = await this.fetchVideoDurations(
+      playlist.videos.map((v) => v.ytVideoId),
+      apiKey,
+    );
+
+    const videos = playlist.videos.map((v) => ({
+      ytVideoId: v.ytVideoId,
+      title: v.title,
+      description: v.description || '',
+      position: v.position,
+      durationSec: durations[v.ytVideoId] ?? 0,
+    }));
+
+    try {
+      const { data } = await axios.post(
+        `${AI_URL}/schedule`,
+        {
+          videos,
+          hoursPerDay,
+          days,
+          speed: dto.speed ?? 1.0,
+          multiplier: dto.multiplier ?? 1.25,
+          useLlm: dto.useLlm ?? true,
+        },
+        { timeout: 120_000 },
+      );
+      return data;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'AI service unavailable';
+      throw new InternalServerErrorException(`Schedule generation failed: ${msg}`);
+    }
+  }
+
   private formatResponse(playlist: any) {
     return {
       id: playlist.id,
@@ -192,5 +257,35 @@ export class PlaylistsService {
     } while (pageToken && videos.length < 200);
 
     return videos;
+  }
+
+  // Fetch real durations (seconds) for a list of video IDs via videos.list
+  // contentDetails, 50 IDs per request (the API's batch limit).
+  private async fetchVideoDurations(
+    videoIds: string[],
+    apiKey: string,
+  ): Promise<Record<string, number>> {
+    const durations: Record<string, number> = {};
+    for (let i = 0; i < videoIds.length; i += 50) {
+      const batch = videoIds.slice(i, i + 50);
+      const { data } = await axios.get(`${YT_API}/videos`, {
+        params: { id: batch.join(','), key: apiKey, part: 'contentDetails' },
+      });
+      for (const item of data.items || []) {
+        durations[item.id] = this.parseIso8601Duration(item.contentDetails?.duration);
+      }
+    }
+    return durations;
+  }
+
+  // "PT1H30M15S" -> total seconds.
+  private parseIso8601Duration(iso: string | undefined): number {
+    if (!iso) return 0;
+    const m = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(iso);
+    if (!m) return 0;
+    const h = parseInt(m[1] || '0', 10);
+    const min = parseInt(m[2] || '0', 10);
+    const s = parseInt(m[3] || '0', 10);
+    return h * 3600 + min * 60 + s;
   }
 }

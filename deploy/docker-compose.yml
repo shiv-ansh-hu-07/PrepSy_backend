@@ -16,6 +16,18 @@ services:
     env_file: secrets.env
     expose:
       - '5000'
+    depends_on:
+      - ai
+
+  # PrepSy AI microservice (FastAPI). Internal only — reachable by the app on the
+  # compose network at http://ai:8000 (set AI_SERVICE_URL=http://ai:8000 in SSM).
+  # AI_IMAGE comes from the sibling .env; GROQ_API_KEY comes from secrets.env.
+  ai:
+    image: ${AI_IMAGE}
+    restart: unless-stopped
+    env_file: secrets.env
+    expose:
+      - '8000'
 
   caddy:
     image: caddy:2-alpine
