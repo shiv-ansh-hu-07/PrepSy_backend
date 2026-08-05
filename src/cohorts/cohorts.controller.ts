@@ -56,6 +56,11 @@ export class CohortsController {
     return this.cohorts.leaveCohort(id, this.uid(req));
   }
 
+  @Delete(':id')
+  remove(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.deleteCohort(id, this.uid(req));
+  }
+
   // ── Discussions ───────────────────────────────────────────────────────────
 
   @Get(':id/discussions')

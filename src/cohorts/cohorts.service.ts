@@ -90,6 +90,17 @@ export class CohortsService {
     return { ok: true };
   }
 
+  async deleteCohort(cohortId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findUnique({ where: { id: cohortId } });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (cohort.createdById !== userId) {
+      throw new ForbiddenException('Only the creator can delete this cohort');
+    }
+    // Members, study sessions, discussions and quiz attempts cascade on delete.
+    await this.prisma.cohort.delete({ where: { id: cohortId } });
+    return { ok: true };
+  }
+
   // ── Discussions ───────────────────────────────────────────────────────────
 
   async getDiscussions(cohortId: string) {
