@@ -300,6 +300,7 @@ model StudySession {
   roomId      String?
   status      String   @default("SCHEDULED") // SCHEDULED | COMPLETED | POSTPONED
   orderIndex  Int      @default(0)
+  studyHours  Float?   // planned study time for the day
   createdAt   DateTime @default(now())
 
   cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)

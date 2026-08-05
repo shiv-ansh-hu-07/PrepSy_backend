@@ -20,7 +20,7 @@ export interface CreateCohortInput {
   startMode?: 'NOW' | 'SCHEDULED';
   dailyTime?: string;
   startDate?: string;
-  sessions?: { topic: string; description?: string }[];
+  sessions?: { topic: string; description?: string; studyHours?: number }[];
 }
 
 export interface UpdateCohortInput {
@@ -94,6 +94,7 @@ export class CohortsService {
             cohortId: cohort.id,
             topic: s.topic,
             description: s.description ?? null,
+            studyHours: s.studyHours ?? null,
             scheduledAt: this.addDays(firstStart, i),
             roomId,
             orderIndex: i,

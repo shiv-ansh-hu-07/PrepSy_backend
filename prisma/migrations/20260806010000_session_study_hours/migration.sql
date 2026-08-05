@@ -1,0 +1,1 @@
+ALTER TABLE "StudySession" ADD COLUMN "studyHours" DOUBLE PRECISION;
