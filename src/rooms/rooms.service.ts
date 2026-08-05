@@ -542,12 +542,11 @@ export class RoomsService {
   }
 
   async getPublicRooms() {
+    // Fetch ALL public rooms (not just scheduled ones) so that instant/live
+    // rooms without a startTime can still surface while people are in them.
     const rooms = await this.prisma.room.findMany({
       where: {
         visibility: 'PUBLIC',
-        startTime: {
-          not: null,
-        },
       },
       select: this.roomListSelect,
       orderBy: {
@@ -555,9 +554,13 @@ export class RoomsService {
       },
     });
 
+    // Attach live participant counts first, then keep a room if it is either
+    // currently live (someone is in it) or a scheduled room still in its window.
+    const withCounts = await this.attachActiveUserCounts(rooms);
+
     return {
-      rooms: await this.attachActiveUserCounts(
-        rooms.filter((room) => this.shouldShowPublicRoom(room)),
+      rooms: withCounts.filter(
+        (room) => room.activeUsers > 0 || this.shouldShowPublicRoom(room),
       ),
     };
   }
