@@ -17,12 +17,9 @@ type AnalyticsAttendanceRecord = {
   roomId: string;
   joinedAt: Date;
   leftAt: Date | null;
-  room: {
-    roomId: string;
-    name: string;
-    tags: string[];
-    durationMinutes: number | null;
-  };
+  roomName: string | null;
+  roomTags: string[];
+  roomDurationMinutes: number | null;
 };
 
 type AnalyticsRoomMembershipRecord = {
@@ -140,16 +137,6 @@ export class StatsService {
       }),
       this.prisma.roomAttendance.findMany({
         where: { userId },
-        include: {
-          room: {
-            select: {
-              roomId: true,
-              name: true,
-              tags: true,
-              durationMinutes: true,
-            },
-          },
-        },
         orderBy: {
           joinedAt: 'asc',
         },
@@ -190,8 +177,8 @@ export class StatsService {
         return {
           id: entry.id,
           roomId: entry.roomId,
-          roomName: entry.room.name,
-          tags: entry.room.tags || [],
+          roomName: entry.roomName ?? 'Study room',
+          tags: entry.roomTags || [],
           joinedAt: entry.joinedAt,
           leftAt: entry.leftAt,
           dateKey: this.getDateKeyInTimeZone(entry.joinedAt, timeZone),

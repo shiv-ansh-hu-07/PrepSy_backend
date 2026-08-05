@@ -709,8 +709,19 @@ export class RoomsService {
     });
 
     if (!openAttendanceToday) {
+      // Denormalize room info onto the attendance row so analytics survive room deletion.
+      const room = await this.prisma.room.findUnique({
+        where: { roomId },
+        select: { name: true, tags: true, durationMinutes: true },
+      });
       await this.prisma.roomAttendance.create({
-        data: { roomId, userId },
+        data: {
+          roomId,
+          userId,
+          roomName: room?.name ?? null,
+          roomTags: room?.tags ?? [],
+          roomDurationMinutes: room?.durationMinutes ?? null,
+        },
       });
     }
 
@@ -893,9 +904,8 @@ export class RoomsService {
       this.prisma.pomodoro.deleteMany({
         where: { roomId },
       }),
-      this.prisma.roomAttendance.deleteMany({
-        where: { roomId },
-      }),
+      // RoomAttendance is intentionally NOT deleted — it holds session-based analytics
+      // that must survive room deletion (it no longer has a foreign key to Room).
       this.prisma.room.delete({
         where: { roomId },
       }),

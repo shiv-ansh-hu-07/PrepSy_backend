@@ -126,7 +126,6 @@ model Room {
   members  RoomMember[]
   messages Message[]
   pomodoro Pomodoro?
-  attendance RoomAttendance[]
 
   @@index([ownerId, createdAt])
 }
@@ -179,7 +178,12 @@ model RoomAttendance {
   joinedAt  DateTime @default(now())
   leftAt    DateTime?
 
-  room Room @relation(fields: [roomId], references: [roomId])
+  // Room info denormalized here so a user's analytics survive room deletion
+  // (session-based, like FocusSession). Intentionally no FK to Room.
+  roomName            String?
+  roomTags            String[] @default([])
+  roomDurationMinutes Int?
+
   user User @relation(fields: [userId], references: [id])
 
   @@index([roomId])

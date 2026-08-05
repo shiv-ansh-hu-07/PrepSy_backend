@@ -33,4 +33,7 @@ COPY --from=build /app/dist ./dist
 USER node
 
 EXPOSE 5000
-CMD ["node", "dist/main.js"]
+# Apply any pending DB migrations before the app starts serving, so new code never
+# runs against an un-migrated schema. Fails fast (and keeps the old container running)
+# if a migration errors, rather than booting broken.
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

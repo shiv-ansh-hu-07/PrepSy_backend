@@ -136,7 +136,6 @@ export class NotificationsService {
         joinedAt: { gte: new Date(weekAgo + 'T00:00:00+05:30') },
       },
       include: {
-        room: { select: { durationMinutes: true } },
         user: { select: { id: true, name: true, email: true } },
       },
     });
