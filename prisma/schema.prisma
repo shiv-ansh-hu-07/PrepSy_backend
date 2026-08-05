@@ -262,6 +262,12 @@ model Cohort {
   maxSize     Int      @default(10)
   createdAt   DateTime @default(now())
 
+  // YouTube cohort: shared recurring study room + daily scheduling
+  roomId      String?   // the recurring room members enter
+  startMode   String?   // "NOW" | "SCHEDULED"
+  dailyTime   String?   // daily session time, "HH:MM" (for display)
+  startDate   DateTime? // first session date/time
+
   playlist     Playlist         @relation(fields: [playlistId], references: [id])
   createdBy    User             @relation("UserCreatedCohorts", fields: [createdById], references: [id])
   members      CohortMember[]
@@ -289,13 +295,17 @@ model StudySession {
   id          String   @id @default(cuid())
   cohortId    String
   topic       String
+  description String?
   scheduledAt DateTime
   roomId      String?
+  status      String   @default("SCHEDULED") // SCHEDULED | COMPLETED | POSTPONED
+  orderIndex  Int      @default(0)
   createdAt   DateTime @default(now())
 
   cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
 
   @@index([cohortId])
+  @@index([status, scheduledAt])
 }
 
 model DiscussionPost {

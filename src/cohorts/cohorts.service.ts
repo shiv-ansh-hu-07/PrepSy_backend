@@ -7,8 +7,25 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import axios from 'axios';
+import { randomUUID } from 'crypto';
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+
+export interface CreateCohortInput {
+  playlistId: string;
+  name: string;
+  maxSize?: number;
+  startMode?: 'NOW' | 'SCHEDULED';
+  dailyTime?: string;
+  startDate?: string;
+  sessions?: { topic: string; description?: string }[];
+}
+
+export interface UpdateCohortInput {
+  name?: string;
+  dailyTime?: string;
+  startDate?: string;
+}
 
 @Injectable()
 export class CohortsService {
@@ -16,21 +33,112 @@ export class CohortsService {
 
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
-  async createCohort(userId: string, playlistId: string, name: string, maxSize = 10) {
+  async createCohort(userId: string, input: CreateCohortInput) {
+    const { playlistId, name, maxSize = 10, startMode, dailyTime, startDate, sessions } = input;
+
     const playlist = await this.prisma.playlist.findUnique({ where: { id: playlistId } });
     if (!playlist) throw new NotFoundException('Playlist not found');
+    if (!name?.trim()) throw new BadRequestException('Cohort name is required');
+
+    const now = new Date();
+    const firstStart =
+      startMode === 'SCHEDULED' && startDate ? new Date(startDate) : now;
+    if (Number.isNaN(firstStart.getTime())) {
+      throw new BadRequestException('Invalid start date');
+    }
 
     const cohort = await this.prisma.cohort.create({
       data: {
         playlistId,
-        name,
+        name: name.trim(),
         createdById: userId,
         maxSize,
+        startMode: startMode ?? null,
+        dailyTime: dailyTime ?? null,
+        startDate: startMode ? firstStart : null,
         members: { create: { userId, progress: {} } },
       },
-      include: { playlist: { include: { plan: true } }, members: true },
     });
-    return cohort;
+
+    // Scheduled cohorts get one shared recurring room + a daily session per plan-day.
+    if (startMode === 'NOW' || startMode === 'SCHEDULED') {
+      const roomId = randomUUID();
+      await this.prisma.room.create({
+        data: {
+          name: name.trim(),
+          roomId,
+          description: `Study room for the "${name.trim()}" cohort`,
+          tags: [],
+          visibility: 'PUBLIC',
+          ownerId: userId,
+          startTime: firstStart,
+          durationMinutes: 60,
+          isRecurring: true,
+          recurrenceType: 'DAILY',
+          youtubePlaylistId: playlist.ytPlaylistId,
+          remindersent: false,
+        },
+      });
+      await this.prisma.roomMember.create({ data: { roomId, userId } });
+      await this.prisma.cohort.update({ where: { id: cohort.id }, data: { roomId } });
+
+      const dayList = Array.isArray(sessions) ? sessions : [];
+      if (dayList.length) {
+        await this.prisma.studySession.createMany({
+          data: dayList.map((s, i) => ({
+            cohortId: cohort.id,
+            topic: s.topic,
+            description: s.description ?? null,
+            scheduledAt: this.addDays(firstStart, i),
+            roomId,
+            orderIndex: i,
+            status: 'SCHEDULED',
+          })),
+        });
+      }
+    }
+
+    return this.getCohort(cohort.id, userId);
+  }
+
+  async updateCohort(cohortId: string, userId: string, input: UpdateCohortInput) {
+    const cohort = await this.prisma.cohort.findUnique({ where: { id: cohortId } });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (cohort.createdById !== userId) {
+      throw new ForbiddenException('Only the creator can edit this cohort');
+    }
+
+    const data: {
+      name?: string;
+      dailyTime?: string;
+      startDate?: Date;
+    } = {};
+    if (typeof input.name === 'string' && input.name.trim()) data.name = input.name.trim();
+    if (typeof input.dailyTime === 'string') data.dailyTime = input.dailyTime;
+    if (input.startDate) {
+      const d = new Date(input.startDate);
+      if (!Number.isNaN(d.getTime())) data.startDate = d;
+    }
+
+    await this.prisma.cohort.update({ where: { id: cohortId }, data });
+
+    // Keep the shared room in sync with name / next start time.
+    if (cohort.roomId) {
+      const roomData: { name?: string; startTime?: Date } = {};
+      if (data.name) roomData.name = data.name;
+      if (data.startDate) roomData.startTime = data.startDate;
+      if (Object.keys(roomData).length) {
+        await this.prisma.room.update({ where: { roomId: cohort.roomId }, data: roomData });
+      }
+    }
+
+    return this.getCohort(cohortId, userId);
+  }
+
+  private addDays(date: Date, days: number): Date {
+    const d = new Date(date);
+    d.setDate(d.getDate() + days);
+    return d;
   }
 
   async listUserCohorts(userId: string) {

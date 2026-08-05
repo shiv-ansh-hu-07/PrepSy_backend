@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Body,
@@ -12,6 +13,7 @@ import {
 import { CohortsService } from './cohorts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import type { RequestWithUser } from '../auth/auth-user.interface';
+import type { CreateCohortInput, UpdateCohortInput } from './cohorts.service';
 
 @Controller('cohorts')
 @UseGuards(JwtAuthGuard)
@@ -27,13 +29,17 @@ export class CohortsController {
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
   @Post()
-  create(
+  create(@Req() req: RequestWithUser, @Body() body: CreateCohortInput) {
+    return this.cohorts.createCohort(this.uid(req), body);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
     @Req() req: RequestWithUser,
-    @Body('playlistId') playlistId: string,
-    @Body('name') name: string,
-    @Body('maxSize') maxSize?: number,
+    @Body() body: UpdateCohortInput,
   ) {
-    return this.cohorts.createCohort(this.uid(req), playlistId, name, maxSize);
+    return this.cohorts.updateCohort(id, this.uid(req), body);
   }
 
   @Get()
