@@ -85,6 +85,24 @@ export class EmailService {
     });
   }
 
+  async sendCohortSessionEmail(
+    to: string,
+    cohortName: string,
+    topic: string,
+    joinUrl: string,
+  ) {
+    await this.sendEmail({
+      to,
+      subject: `Today in "${cohortName}": ${topic}`,
+      html: `
+        <h2>Today's session</h2>
+        <p><strong>${topic}</strong></p>
+        <p>Your "${cohortName}" study room is ready — join your cohort and study together.</p>
+        <p><a href="${joinUrl}" style="background:#7c3aed;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Join the room</a></p>
+      `,
+    });
+  }
+
   async sendReminderEmail(
     to: string,
     roomName: string,

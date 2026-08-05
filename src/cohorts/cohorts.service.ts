@@ -8,6 +8,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
+import { Cron } from '@nestjs/schedule';
+import { EmailService } from '../email/email.service';
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
@@ -29,7 +31,10 @@ export interface UpdateCohortInput {
 
 @Injectable()
 export class CohortsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private emailService: EmailService,
+  ) {}
 
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
@@ -139,6 +144,98 @@ export class CohortsService {
     const d = new Date(date);
     d.setDate(d.getDate() + days);
     return d;
+  }
+
+  private dayBounds(date: Date) {
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
+  }
+
+  // ── Daily cohort session engine ─────────────────────────────────────────────
+
+  // Each morning: email members today's topic + room link, and arm the existing
+  // 15-minute room reminder for today's occurrence.
+  @Cron('0 8 * * *')
+  async notifyTodaysCohortSessions() {
+    const { start, end } = this.dayBounds(new Date());
+    const sessions = await this.prisma.studySession.findMany({
+      where: { status: 'SCHEDULED', scheduledAt: { gte: start, lte: end } },
+      include: {
+        cohort: {
+          include: { members: { include: { user: { select: { email: true } } } } },
+        },
+      },
+    });
+
+    const frontendUrl = process.env.FRONTEND_URL || '';
+    for (const session of sessions) {
+      const roomId = session.roomId || session.cohort.roomId;
+      if (!roomId) continue;
+      const joinUrl = `${frontendUrl}/room/${roomId}`;
+
+      await this.prisma.room
+        .update({
+          where: { roomId },
+          data: { startTime: session.scheduledAt, remindersent: false },
+        })
+        .catch(() => undefined);
+
+      for (const member of session.cohort.members) {
+        if (member.user?.email) {
+          await this.emailService.sendCohortSessionEmail(
+            member.user.email,
+            session.cohort.name,
+            session.topic,
+            joinUrl,
+          );
+        }
+      }
+    }
+  }
+
+  // Just after midnight: resolve yesterday's sessions. If anyone attended the
+  // room that day, mark it COMPLETED; otherwise POSTPONE it and shift every later
+  // scheduled session one day forward (nothing gets skipped).
+  @Cron('5 0 * * *')
+  async resolveMissedCohortSessions() {
+    const yesterday = this.addDays(new Date(), -1);
+    const { start, end } = this.dayBounds(yesterday);
+
+    const sessions = await this.prisma.studySession.findMany({
+      where: { status: 'SCHEDULED', scheduledAt: { gte: start, lte: end } },
+    });
+
+    for (const session of sessions) {
+      const attended = session.roomId
+        ? await this.prisma.roomAttendance.count({
+            where: { roomId: session.roomId, joinedAt: { gte: start, lte: end } },
+          })
+        : 0;
+
+      if (attended > 0) {
+        await this.prisma.studySession.update({
+          where: { id: session.id },
+          data: { status: 'COMPLETED' },
+        });
+      } else {
+        const later = await this.prisma.studySession.findMany({
+          where: {
+            cohortId: session.cohortId,
+            status: 'SCHEDULED',
+            orderIndex: { gte: session.orderIndex },
+          },
+        });
+        for (const s of later) {
+          await this.prisma.studySession.update({
+            where: { id: s.id },
+            data: { scheduledAt: this.addDays(s.scheduledAt, 1) },
+          });
+        }
+      }
+    }
   }
 
   async listUserCohorts(userId: string) {
