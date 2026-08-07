@@ -13,7 +13,7 @@ import {
 import { CohortsService } from './cohorts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import type { RequestWithUser } from '../auth/auth-user.interface';
-import type { CreateCohortInput, UpdateCohortInput } from './cohorts.service';
+import type { CreateCohortInput, UpdateCohortInput, SetPlanInput } from './cohorts.service';
 
 @Controller('cohorts')
 @UseGuards(JwtAuthGuard)
@@ -60,6 +60,15 @@ export class CohortsController {
   @Delete(':id/leave')
   leave(@Param('id') id: string, @Req() req: RequestWithUser) {
     return this.cohorts.leaveCohort(id, this.uid(req));
+  }
+
+  @Post(':id/plan')
+  setPlan(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Body() body: SetPlanInput,
+  ) {
+    return this.cohorts.setPlan(id, this.uid(req), body);
   }
 
   @Delete(':id')

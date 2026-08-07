@@ -29,6 +29,12 @@ export interface UpdateCohortInput {
   startDate?: string;
 }
 
+export interface SetPlanInput {
+  sessions?: { topic: string; description?: string; studyHours?: number }[];
+  dailyTime?: string;
+  startDate?: string;
+}
+
 @Injectable()
 export class CohortsService {
   constructor(
@@ -136,6 +142,80 @@ export class CohortsService {
       if (Object.keys(roomData).length) {
         await this.prisma.room.update({ where: { roomId: cohort.roomId }, data: roomData });
       }
+    }
+
+    return this.getCohort(cohortId, userId);
+  }
+
+  // Save (or replace) the cohort's shared day-by-day plan. Works for any cohort,
+  // including older ones that were created without a schedule — it creates the
+  // shared recurring room if one doesn't exist yet.
+  async setPlan(cohortId: string, userId: string, input: SetPlanInput) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: { playlist: true },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (cohort.createdById !== userId) {
+      throw new ForbiddenException('Only the creator can set the plan');
+    }
+
+    const firstStart = input.startDate
+      ? new Date(input.startDate)
+      : (cohort.startDate ?? new Date());
+    if (Number.isNaN(firstStart.getTime())) {
+      throw new BadRequestException('Invalid start date');
+    }
+
+    // Ensure the cohort has a shared room (create one if it never had scheduling).
+    let roomId = cohort.roomId;
+    if (!roomId) {
+      roomId = randomUUID();
+      await this.prisma.room.create({
+        data: {
+          name: cohort.name,
+          roomId,
+          description: `Study room for the "${cohort.name}" cohort`,
+          tags: [],
+          visibility: 'PUBLIC',
+          ownerId: userId,
+          startTime: firstStart,
+          durationMinutes: 60,
+          isRecurring: true,
+          recurrenceType: 'DAILY',
+          youtubePlaylistId: cohort.playlist.ytPlaylistId,
+          remindersent: false,
+        },
+      });
+      await this.prisma.roomMember.create({ data: { roomId, userId } });
+    }
+
+    await this.prisma.cohort.update({
+      where: { id: cohortId },
+      data: {
+        roomId,
+        startMode: cohort.startMode ?? 'SCHEDULED',
+        startDate: firstStart,
+        dailyTime: input.dailyTime ?? cohort.dailyTime,
+      },
+    });
+
+    // Replace the day-by-day plan.
+    await this.prisma.studySession.deleteMany({ where: { cohortId } });
+    const dayList = Array.isArray(input.sessions) ? input.sessions : [];
+    if (dayList.length) {
+      await this.prisma.studySession.createMany({
+        data: dayList.map((s, i) => ({
+          cohortId,
+          topic: s.topic,
+          description: s.description ?? null,
+          studyHours: s.studyHours ?? null,
+          scheduledAt: this.addDays(firstStart, i),
+          roomId,
+          orderIndex: i,
+          status: 'SCHEDULED',
+        })),
+      });
     }
 
     return this.getCohort(cohortId, userId);
