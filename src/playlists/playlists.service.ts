@@ -42,6 +42,28 @@ export class PlaylistsService {
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     if (cached && cached.cachedAt > sevenDaysAgo && cached.plan) {
+      // Refresh the total-hours estimate from real durations (cheap; the cached
+      // AI curriculum/roadmap is reused). Fixes older plans that stored a guess.
+      try {
+        const apiKey = process.env.YOUTUBE_API_KEY;
+        if (apiKey && cached.videos?.length) {
+          const durations = await this.fetchVideoDurations(
+            cached.videos.map((v) => v.ytVideoId),
+            apiKey,
+          );
+          const totalSec = Object.values(durations).reduce((a, b) => a + b, 0);
+          const realHours = totalSec > 0 ? Math.round((totalSec / 3600) * 10) / 10 : null;
+          if (realHours && realHours !== cached.plan.estimatedHours) {
+            await this.prisma.playlistPlan.update({
+              where: { playlistId: cached.id },
+              data: { estimatedHours: realHours },
+            });
+            cached.plan.estimatedHours = realHours;
+          }
+        }
+      } catch {
+        /* keep the cached estimate */
+      }
       return this.formatResponse(cached);
     }
 
