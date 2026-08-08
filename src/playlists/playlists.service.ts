@@ -112,19 +112,33 @@ export class PlaylistsService {
       throw new InternalServerErrorException(`AI analysis failed: ${msg}`);
     }
 
+    // The AI's estimatedHours is a guess (it never sees durations) and can be
+    // wildly off. Compute the real total length from actual video durations.
+    let estimatedHours = aiResult.estimatedHours;
+    try {
+      const durations = await this.fetchVideoDurations(
+        playlist.videos.map((v) => v.ytVideoId),
+        apiKey,
+      );
+      const totalSec = Object.values(durations).reduce((a, b) => a + b, 0);
+      if (totalSec > 0) estimatedHours = Math.round((totalSec / 3600) * 10) / 10;
+    } catch {
+      /* fall back to the AI estimate */
+    }
+
     // Upsert plan
     const plan = await this.prisma.playlistPlan.upsert({
       where: { playlistId: playlist.id },
       create: {
         playlistId: playlist.id,
         difficulty: aiResult.difficulty,
-        estimatedHours: aiResult.estimatedHours,
+        estimatedHours,
         curriculum: aiResult.curriculum as object,
         roadmap: aiResult.roadmap as object,
       },
       update: {
         difficulty: aiResult.difficulty,
-        estimatedHours: aiResult.estimatedHours,
+        estimatedHours,
         curriculum: aiResult.curriculum as object,
         roadmap: aiResult.roadmap as object,
         generatedAt: new Date(),
