@@ -160,6 +160,18 @@ export class CohortsService {
       throw new ForbiddenException('Only the creator can set the plan');
     }
 
+    // The schedule is locked once a plan exists. Regenerating would delete and
+    // recreate every StudySession, breaking the room schedule, the daily
+    // reminder emails, and anything already tied to the current dates.
+    const existingSessions = await this.prisma.studySession.count({
+      where: { cohortId },
+    });
+    if (existingSessions > 0) {
+      throw new ForbiddenException(
+        'This cohort already has a schedule. The plan is locked once created and cannot be regenerated.',
+      );
+    }
+
     const firstStart = input.startDate
       ? new Date(input.startDate)
       : (cohort.startDate ?? new Date());
