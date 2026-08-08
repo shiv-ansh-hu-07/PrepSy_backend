@@ -53,12 +53,14 @@ export class PlaylistsService {
           );
           const totalSec = Object.values(durations).reduce((a, b) => a + b, 0);
           const realHours = totalSec > 0 ? Math.round((totalSec / 3600) * 10) / 10 : null;
-          if (realHours && realHours !== cached.plan.estimatedHours) {
+          if (realHours) {
+            const scaled = this.scaleRoadmap(cached.plan.roadmap, realHours);
             await this.prisma.playlistPlan.update({
               where: { playlistId: cached.id },
-              data: { estimatedHours: realHours },
+              data: { estimatedHours: realHours, roadmap: scaled as object },
             });
             cached.plan.estimatedHours = realHours;
+            cached.plan.roadmap = scaled;
           }
         }
       } catch {
@@ -148,6 +150,8 @@ export class PlaylistsService {
       /* fall back to the AI estimate */
     }
 
+    const scaledRoadmap = this.scaleRoadmap(aiResult.roadmap, estimatedHours);
+
     // Upsert plan
     const plan = await this.prisma.playlistPlan.upsert({
       where: { playlistId: playlist.id },
@@ -156,13 +160,13 @@ export class PlaylistsService {
         difficulty: aiResult.difficulty,
         estimatedHours,
         curriculum: aiResult.curriculum as object,
-        roadmap: aiResult.roadmap as object,
+        roadmap: scaledRoadmap as object,
       },
       update: {
         difficulty: aiResult.difficulty,
         estimatedHours,
         curriculum: aiResult.curriculum as object,
-        roadmap: aiResult.roadmap as object,
+        roadmap: scaledRoadmap as object,
         generatedAt: new Date(),
       },
     });
@@ -297,6 +301,22 @@ export class PlaylistsService {
 
   // Fetch real durations (seconds) for a list of video IDs via videos.list
   // contentDetails, 50 IDs per request (the API's batch limit).
+  // Scale the AI roadmap's per-week studyHours so they sum to the real total
+  // (the AI guesses these without durations, so they're often way off).
+  private scaleRoadmap(roadmap: unknown, targetHours: number): unknown {
+    if (!Array.isArray(roadmap) || !targetHours) return roadmap;
+    const total = roadmap.reduce(
+      (s: number, w: { studyHours?: number }) => s + (Number(w?.studyHours) || 0),
+      0,
+    );
+    if (total <= 0) return roadmap;
+    const scale = targetHours / total;
+    return roadmap.map((w: { studyHours?: number }) => ({
+      ...w,
+      studyHours: Math.max(1, Math.round((Number(w?.studyHours) || 0) * scale)),
+    }));
+  }
+
   private async fetchVideoDurations(
     videoIds: string[],
     apiKey: string,
