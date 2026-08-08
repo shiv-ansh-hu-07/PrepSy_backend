@@ -96,8 +96,8 @@ export class CohortsController {
   // ── Study Sessions ────────────────────────────────────────────────────────
 
   @Get(':id/sessions')
-  getSessions(@Param('id') id: string) {
-    return this.cohorts.getSessions(id);
+  getSessions(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getSessions(id, this.uid(req));
   }
 
   @Post(':id/sessions')

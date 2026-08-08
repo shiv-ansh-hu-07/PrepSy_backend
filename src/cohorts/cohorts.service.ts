@@ -425,10 +425,37 @@ export class CohortsService {
 
   // ── Study Sessions ────────────────────────────────────────────────────────
 
-  async getSessions(cohortId: string) {
-    return this.prisma.studySession.findMany({
+  // Per-user, per-day view of the shared plan. Each day carries whether the
+  // requesting user attended that day's room and how many distinct members did
+  // (so the UI can show Joined / Missed / Starting soon, and we keep the group
+  // schedule independent of any one member — one miss never shifts the cohort).
+  async getSessions(cohortId: string, userId: string) {
+    const sessions = await this.prisma.studySession.findMany({
       where: { cohortId },
       orderBy: { scheduledAt: 'asc' },
+    });
+
+    const roomIds = [
+      ...new Set(sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
+    ];
+    const attendance = roomIds.length
+      ? await this.prisma.roomAttendance.findMany({
+          where: { roomId: { in: roomIds } },
+          select: { roomId: true, userId: true, joinedAt: true },
+        })
+      : [];
+
+    return sessions.map((s) => {
+      if (!s.roomId) {
+        return { ...s, attendedByMe: false, attendeeCount: 0 };
+      }
+      const { start, end } = this.dayBounds(s.scheduledAt);
+      const dayRows = attendance.filter(
+        (a) => a.roomId === s.roomId && a.joinedAt >= start && a.joinedAt <= end,
+      );
+      const attendeeCount = new Set(dayRows.map((a) => a.userId)).size;
+      const attendedByMe = dayRows.some((a) => a.userId === userId);
+      return { ...s, attendedByMe, attendeeCount };
     });
   }
 
