@@ -303,13 +303,18 @@ export class PlaylistsService {
   // contentDetails, 50 IDs per request (the API's batch limit).
   // Scale the AI roadmap's per-week studyHours so they sum to the real total
   // (the AI guesses these without durations, so they're often way off).
-  private scaleRoadmap(roadmap: unknown, targetHours: number): unknown {
-    if (!Array.isArray(roadmap) || !targetHours) return roadmap;
+  private scaleRoadmap(
+    roadmap: Array<{ studyHours?: number }> | unknown,
+    targetHours: number,
+  ): { studyHours?: number }[] {
+    if (!Array.isArray(roadmap) || !targetHours) {
+      return (Array.isArray(roadmap) ? roadmap : []) as { studyHours?: number }[];
+    }
     const total = roadmap.reduce(
       (s: number, w: { studyHours?: number }) => s + (Number(w?.studyHours) || 0),
       0,
     );
-    if (total <= 0) return roadmap;
+    if (total <= 0) return roadmap as { studyHours?: number }[];
     const scale = targetHours / total;
     return roadmap.map((w: { studyHours?: number }) => ({
       ...w,
