@@ -247,7 +247,20 @@ export class PlaylistsService {
         },
         { timeout: 120_000 },
       );
-      return data;
+
+      // Flag videos that overrun the daily budget by more than a 1-hour
+      // tolerance window (e.g. a 2h/day plan tolerates up to 3h; a 3.5h video
+      // gets flagged so the UI can offer a chapter-based split).
+      const toleranceMin = hoursPerDay * 60 + 60;
+      const longVideos = selectedVideos
+        .map((v) => ({
+          title: v.title,
+          ytVideoId: v.ytVideoId,
+          durationMin: Math.round((durations[v.ytVideoId] ?? 0) / 60),
+        }))
+        .filter((v) => v.durationMin > toleranceMin);
+
+      return { ...data, longVideos, dailyBudgetMin: hoursPerDay * 60 };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI service unavailable';
       throw new InternalServerErrorException(`Schedule generation failed: ${msg}`);
