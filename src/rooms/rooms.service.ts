@@ -541,6 +541,19 @@ export class RoomsService {
     return { rooms };
   }
 
+  // Flag which rooms back a YouTube cohort (so the UI can show a "Cohort"
+  // badge). Cheap single lookup against Cohort.roomId — covers existing rooms
+  // without any schema change.
+  private async attachCohortFlag<T extends { roomId: string }>(rooms: T[]) {
+    if (rooms.length === 0) return rooms.map((r) => ({ ...r, isCohortRoom: false }));
+    const cohorts = await this.prisma.cohort.findMany({
+      where: { roomId: { in: rooms.map((r) => r.roomId) } },
+      select: { roomId: true },
+    });
+    const cohortRoomIds = new Set(cohorts.map((c) => c.roomId));
+    return rooms.map((r) => ({ ...r, isCohortRoom: cohortRoomIds.has(r.roomId) }));
+  }
+
   async getPublicRooms() {
     // Fetch ALL public rooms (not just scheduled ones) so that instant/live
     // rooms without a startTime can still surface while people are in them.
@@ -559,8 +572,10 @@ export class RoomsService {
     const withCounts = await this.attachActiveUserCounts(rooms);
 
     return {
-      rooms: withCounts.filter(
-        (room) => room.activeUsers > 0 || this.shouldShowPublicRoom(room),
+      rooms: await this.attachCohortFlag(
+        withCounts.filter(
+          (room) => room.activeUsers > 0 || this.shouldShowPublicRoom(room),
+        ),
       ),
     };
   }
@@ -671,8 +686,12 @@ export class RoomsService {
     const joinedRooms = rooms.filter((room) => room.ownerId !== userId);
 
     return {
-      createdRooms: await this.attachActiveUserCounts(createdRooms),
-      joinedRooms: await this.attachActiveUserCounts(joinedRooms),
+      createdRooms: await this.attachCohortFlag(
+        await this.attachActiveUserCounts(createdRooms),
+      ),
+      joinedRooms: await this.attachCohortFlag(
+        await this.attachActiveUserCounts(joinedRooms),
+      ),
     };
   }
 

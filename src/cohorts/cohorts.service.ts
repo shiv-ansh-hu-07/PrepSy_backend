@@ -394,8 +394,24 @@ export class CohortsService {
     if (cohort.createdById !== userId) {
       throw new ForbiddenException('Only the creator can delete this cohort');
     }
-    // Members, study sessions, discussions and quiz attempts cascade on delete.
-    await this.prisma.cohort.delete({ where: { id: cohortId } });
+
+    // Cohort children (members, study sessions, discussions, quiz attempts)
+    // cascade on delete. The shared Room does NOT cascade (it's a separate
+    // record with no FK from Cohort), so tear it down explicitly — otherwise it
+    // lingers on Home / My Rooms after the cohort is gone. RoomAttendance is
+    // intentionally kept for analytics.
+    const roomId = cohort.roomId;
+    await this.prisma.$transaction([
+      ...(roomId
+        ? [
+            this.prisma.roomMember.deleteMany({ where: { roomId } }),
+            this.prisma.message.deleteMany({ where: { roomId } }),
+            this.prisma.pomodoro.deleteMany({ where: { roomId } }),
+          ]
+        : []),
+      this.prisma.cohort.delete({ where: { id: cohortId } }),
+      ...(roomId ? [this.prisma.room.deleteMany({ where: { roomId } })] : []),
+    ]);
     return { ok: true };
   }
 
