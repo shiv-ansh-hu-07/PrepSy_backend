@@ -110,6 +110,17 @@ export class CohortsController {
     return this.cohorts.createSession(id, this.uid(req), topic, new Date(scheduledAt));
   }
 
+  // Mark a missed day as personally caught up (self-study). Body: { done: boolean }.
+  @Post(':id/sessions/:sessionId/catchup')
+  markCatchup(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Req() req: RequestWithUser,
+    @Body('done') done?: boolean,
+  ) {
+    return this.cohorts.markCatchup(id, this.uid(req), sessionId, done !== false);
+  }
+
   // ── Quizzes ───────────────────────────────────────────────────────────────
 
   @Post(':id/quiz/generate')

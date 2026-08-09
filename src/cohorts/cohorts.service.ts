@@ -430,10 +430,29 @@ export class CohortsService {
   // (so the UI can show Joined / Missed / Starting soon, and we keep the group
   // schedule independent of any one member — one miss never shifts the cohort).
   async getSessions(cohortId: string, userId: string) {
-    const sessions = await this.prisma.studySession.findMany({
-      where: { cohortId },
-      orderBy: { scheduledAt: 'asc' },
-    });
+    const [sessions, cohort, member] = await Promise.all([
+      this.prisma.studySession.findMany({
+        where: { cohortId },
+        orderBy: { scheduledAt: 'asc' },
+      }),
+      this.prisma.cohort.findUnique({
+        where: { id: cohortId },
+        include: {
+          playlist: {
+            include: {
+              videos: {
+                select: { ytVideoId: true, title: true, thumbnailUrl: true, position: true },
+                orderBy: { position: 'asc' },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.cohortMember.findUnique({
+        where: { cohortId_userId: { cohortId, userId } },
+        select: { progress: true },
+      }),
+    ]);
 
     const roomIds = [
       ...new Set(sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
@@ -445,9 +464,23 @@ export class CohortsService {
         })
       : [];
 
+    // Map each day's video titles (stored in `description`, joined by " • ")
+    // back to real playlist videos so the UI can offer clickable catch-up links.
+    const byTitle = new Map(
+      (cohort?.playlist?.videos ?? []).map((v) => [v.title.trim(), v]),
+    );
+    const caughtUp = this.getCaughtUpMap(member?.progress);
+
     return sessions.map((s) => {
+      const videos = (s.description ?? '')
+        .split(' • ')
+        .map((t) => byTitle.get(t.trim()))
+        .filter((v): v is NonNullable<typeof v> => Boolean(v))
+        .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title, thumbnailUrl: v.thumbnailUrl }));
+      const caughtUpByMe = caughtUp[s.id] === true;
+
       if (!s.roomId) {
-        return { ...s, attendedByMe: false, attendeeCount: 0 };
+        return { ...s, attendedByMe: false, attendeeCount: 0, caughtUpByMe, videos };
       }
       const { start, end } = this.dayBounds(s.scheduledAt);
       const dayRows = attendance.filter(
@@ -455,8 +488,57 @@ export class CohortsService {
       );
       const attendeeCount = new Set(dayRows.map((a) => a.userId)).size;
       const attendedByMe = dayRows.some((a) => a.userId === userId);
-      return { ...s, attendedByMe, attendeeCount };
+      return { ...s, attendedByMe, attendeeCount, caughtUpByMe, videos };
     });
+  }
+
+  // Personal catch-up lives in the per-user CohortMember.progress JSON — no
+  // schema change needed. Shape: { caughtUp: { [studySessionId]: true } }.
+  private getCaughtUpMap(progress: unknown): Record<string, boolean> {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const cu = (progress as Record<string, unknown>).caughtUp;
+      if (cu && typeof cu === 'object' && !Array.isArray(cu)) {
+        return cu as Record<string, boolean>;
+      }
+    }
+    return {};
+  }
+
+  // Mark (or unmark) a missed day as personally caught up. Does not touch the
+  // shared cohort schedule — this is purely the requesting member's progress.
+  async markCatchup(
+    cohortId: string,
+    userId: string,
+    sessionId: string,
+    done: boolean,
+  ) {
+    await this.assertMember(cohortId, userId);
+    const session = await this.prisma.studySession.findFirst({
+      where: { id: sessionId, cohortId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const caughtUp = this.getCaughtUpMap(member?.progress);
+    if (done) {
+      caughtUp[sessionId] = true;
+    } else {
+      delete caughtUp[sessionId];
+    }
+    const baseProgress =
+      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId, userId } },
+      data: { progress: { ...baseProgress, caughtUp } },
+    });
+    return { sessionId, caughtUpByMe: done };
   }
 
   async createSession(cohortId: string, userId: string, topic: string, scheduledAt: Date) {
