@@ -14,6 +14,9 @@ export interface ScheduleDto {
   // Optional: start the schedule from this playlist position (inclusive),
   // so a learner can begin partway through a playlist.
   startPosition?: number;
+  // Optional: split videos that overrun the daily budget (beyond the 1h
+  // tolerance) into time-based segments spread over consecutive days.
+  sliceLongVideos?: boolean;
 }
 
 @Injectable()
@@ -251,7 +254,8 @@ export class PlaylistsService {
       // Flag videos that overrun the daily budget by more than a 1-hour
       // tolerance window (e.g. a 2h/day plan tolerates up to 3h; a 3.5h video
       // gets flagged so the UI can offer a chapter-based split).
-      const toleranceMin = hoursPerDay * 60 + 60;
+      const budgetMin = hoursPerDay * 60;
+      const toleranceMin = budgetMin + 60;
       const longVideos = selectedVideos
         .map((v) => ({
           title: v.title,
@@ -260,7 +264,38 @@ export class PlaylistsService {
         }))
         .filter((v) => v.durationMin > toleranceMin);
 
-      return { ...data, longVideos, dailyBudgetMin: hoursPerDay * 60 };
+      // If asked, slice each over-long video into consecutive day-sized
+      // segments (by time) so it carries forward across days instead of
+      // blowing a single day's budget. Over-long videos sit alone on a day
+      // (greedy packer), so we split those days in place and renumber.
+      if (dto.sliceLongVideos && longVideos.length && Array.isArray(data?.days)) {
+        const sliceSec = Math.round(budgetMin * 60);
+        const slicedDays: any[] = [];
+        for (const day of data.days) {
+          const vids = Array.isArray(day.videos) ? day.videos : [];
+          const solo = vids.length === 1 ? vids[0] : null;
+          if (solo && Number(solo.durationMin) > toleranceMin) {
+            const durationSec = Math.round(Number(solo.durationMin) * 60);
+            const parts = Math.ceil(durationSec / sliceSec);
+            for (let i = 0; i < parts; i++) {
+              const startSec = i * sliceSec;
+              const endSec = Math.min((i + 1) * sliceSec, durationSec);
+              slicedDays.push({
+                studyHours: Math.round(((endSec - startSec) / 3600) * 100) / 100,
+                videos: [{ ...solo, part: `${i + 1}/${parts}`, startSec, endSec }],
+              });
+            }
+          } else {
+            slicedDays.push(day);
+          }
+        }
+        slicedDays.forEach((d, i) => {
+          d.day = i + 1;
+        });
+        data.days = slicedDays;
+      }
+
+      return { ...data, longVideos, dailyBudgetMin: budgetMin, sliced: Boolean(dto.sliceLongVideos) };
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI service unavailable';
       throw new InternalServerErrorException(`Schedule generation failed: ${msg}`);
