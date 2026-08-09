@@ -11,6 +11,9 @@ export interface ScheduleDto {
   speed?: number;
   multiplier?: number;
   useLlm?: boolean;
+  // Optional: start the schedule from this playlist position (inclusive),
+  // so a learner can begin partway through a playlist.
+  startPosition?: number;
 }
 
 @Injectable()
@@ -204,15 +207,26 @@ export class PlaylistsService {
     if (!playlist) throw new BadRequestException('Playlist not found');
     if (!playlist.videos.length) throw new BadRequestException('Playlist has no videos');
 
+    // Start partway through the playlist if requested — schedule only the
+    // videos at or after the chosen position.
+    let selectedVideos = playlist.videos;
+    if (dto.startPosition != null && Number.isFinite(Number(dto.startPosition))) {
+      const startPosition = Number(dto.startPosition);
+      selectedVideos = playlist.videos.filter((v) => v.position >= startPosition);
+      if (!selectedVideos.length) {
+        throw new BadRequestException('No videos at or after the chosen start point');
+      }
+    }
+
     const apiKey = process.env.YOUTUBE_API_KEY;
     if (!apiKey) throw new InternalServerErrorException('YOUTUBE_API_KEY not configured');
 
     const durations = await this.fetchVideoDurations(
-      playlist.videos.map((v) => v.ytVideoId),
+      selectedVideos.map((v) => v.ytVideoId),
       apiKey,
     );
 
-    const videos = playlist.videos.map((v) => ({
+    const videos = selectedVideos.map((v) => ({
       ytVideoId: v.ytVideoId,
       title: v.title,
       description: v.description || '',
