@@ -545,13 +545,19 @@ export class RoomsService {
   // badge). Cheap single lookup against Cohort.roomId — covers existing rooms
   // without any schema change.
   private async attachCohortFlag<T extends { roomId: string }>(rooms: T[]) {
-    if (rooms.length === 0) return rooms.map((r) => ({ ...r, isCohortRoom: false }));
+    if (rooms.length === 0) {
+      return rooms.map((r) => ({ ...r, isCohortRoom: false, cohortId: null }));
+    }
     const cohorts = await this.prisma.cohort.findMany({
       where: { roomId: { in: rooms.map((r) => r.roomId) } },
-      select: { roomId: true },
+      select: { id: true, roomId: true },
     });
-    const cohortRoomIds = new Set(cohorts.map((c) => c.roomId));
-    return rooms.map((r) => ({ ...r, isCohortRoom: cohortRoomIds.has(r.roomId) }));
+    const cohortIdByRoom = new Map(cohorts.map((c) => [c.roomId, c.id]));
+    return rooms.map((r) => ({
+      ...r,
+      isCohortRoom: cohortIdByRoom.has(r.roomId),
+      cohortId: cohortIdByRoom.get(r.roomId) ?? null,
+    }));
   }
 
   async getPublicRooms() {
