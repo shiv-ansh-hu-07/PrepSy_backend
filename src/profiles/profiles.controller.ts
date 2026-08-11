@@ -39,6 +39,12 @@ export class ProfilesController {
     return this.profilesService.getMyProfile(this.getUserId(req));
   }
 
+  // Ranked list of other discoverable learners with shared study signals.
+  @Get('discover')
+  discoverPeers(@Req() req: RequestWithUser) {
+    return this.profilesService.discoverPeers(this.getUserId(req));
+  }
+
   @Put('me')
   updateMyProfile(@Req() req: RequestWithUser, @Body() body: unknown) {
     return this.profilesService.updateMyProfile(this.getUserId(req), body);

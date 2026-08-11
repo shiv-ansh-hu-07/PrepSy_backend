@@ -521,4 +521,100 @@ export class ProfilesService {
   private isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === 'object' && !Array.isArray(value));
   }
+
+  // ── Peer discovery / matching ───────────────────────────────────────────────
+  // Rank other discoverable learners by shared study signals, so a student who
+  // "struggles alone" can find people prepping for the same thing.
+  async discoverPeers(userId: string) {
+    const me = await this.prisma.userProfile.findUnique({ where: { userId } });
+    const others = await this.prisma.userProfile.findMany({
+      where: { isDiscoverable: true, userId: { not: userId } },
+      include: { user: { select: { id: true, name: true } } },
+    });
+
+    const norm = (arr?: string[] | null) =>
+      (arr || []).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const overlap = (mine: Set<string>, theirs?: string[] | null) =>
+      (theirs || []).filter((v) => mine.has(v.trim().toLowerCase()));
+
+    const myGoals = new Set(norm(me?.goals));
+    const myInterests = new Set(norm(me?.interests));
+    const myExams = new Set(norm(me?.examTargets));
+    const mySkills = new Set(norm(me?.skills));
+    const myLangs = new Set(norm(me?.languages));
+    const myTags = new Set([...myGoals, ...myInterests, ...myExams, ...mySkills]);
+    const eq = (a?: string | null, b?: string | null) =>
+      Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
+
+    const scored = others.map((p) => {
+      const sharedGoals = overlap(myGoals, p.goals);
+      const sharedInterests = overlap(myInterests, p.interests);
+      const sharedExamTargets = overlap(myExams, p.examTargets);
+      const sharedSkills = overlap(mySkills, p.skills);
+      const sharedLanguages = overlap(myLangs, p.languages);
+      const sameCollab =
+        Boolean(me?.collaborationPreference) &&
+        p.collaborationPreference === me?.collaborationPreference;
+      const sameInstitution = eq(me?.institutionName, p.institutionName);
+      const sameCity = eq(me?.city, p.city);
+      const sameExperience =
+        Boolean(me?.experienceLevel) && p.experienceLevel === me?.experienceLevel;
+
+      const score =
+        3 * sharedGoals.length +
+        3 * sharedExamTargets.length +
+        2 * sharedInterests.length +
+        1 * sharedSkills.length +
+        1 * sharedLanguages.length +
+        (sameCollab ? 2 : 0) +
+        (sameInstitution ? 3 : 0) +
+        (sameCity ? 1 : 0) +
+        (sameExperience ? 1 : 0);
+
+      // Jaccard over the combined study-signal space for a friendly percent.
+      const theirTags = new Set([
+        ...norm(p.goals),
+        ...norm(p.interests),
+        ...norm(p.examTargets),
+        ...norm(p.skills),
+      ]);
+      const inter = [...myTags].filter((t) => theirTags.has(t)).length;
+      const union = new Set([...myTags, ...theirTags]).size;
+      const matchPercent = union ? Math.round((inter / union) * 100) : 0;
+
+      return {
+        userId: p.userId,
+        name: p.user?.name || p.username || 'PrepSy Learner',
+        username: p.username,
+        avatarUrl: p.avatarUrl,
+        bio: p.bio,
+        role: p.role,
+        company: p.company,
+        institutionName: p.institutionName,
+        city: p.city,
+        country: p.country,
+        experienceLevel: p.experienceLevel,
+        collaborationPreference: p.collaborationPreference,
+        goals: p.goals,
+        interests: p.interests,
+        examTargets: p.examTargets,
+        githubUrl: p.githubUrl,
+        linkedinUrl: p.linkedinUrl,
+        portfolioUrl: p.portfolioUrl,
+        matchPercent,
+        score,
+        sharedGoals,
+        sharedInterests,
+        sharedExamTargets,
+        sharedLanguages,
+        sameInstitution,
+      };
+    });
+
+    scored.sort((a, b) => b.score - a.score || b.matchPercent - a.matchPercent);
+    const withOverlap = scored.filter((p) => p.score > 0);
+    const peers = (withOverlap.length ? withOverlap : scored).slice(0, 40);
+
+    return { hasProfileSignals: myTags.size > 0, peers };
+  }
 }
