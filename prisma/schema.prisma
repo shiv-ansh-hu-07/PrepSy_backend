@@ -37,7 +37,26 @@ model User {
   friendRequestsSent     Friendship[] @relation("FriendRequestsSent")
   friendRequestsReceived Friendship[] @relation("FriendRequestsReceived")
 
+  dmSent     DirectMessage[] @relation("DmSent")
+  dmReceived DirectMessage[] @relation("DmReceived")
+
   @@unique([provider, providerId])
+}
+
+model DirectMessage {
+  id          String    @id @default(cuid())
+  senderId    String
+  recipientId String
+  text        String
+  roomId      String? // set when the message is a room invite
+  createdAt   DateTime  @default(now())
+  readAt      DateTime?
+
+  sender    User @relation("DmSent", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User @relation("DmReceived", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, readAt])
 }
 
 model Friendship {

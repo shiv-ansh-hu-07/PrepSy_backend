@@ -154,12 +154,97 @@ export class FriendsService {
   }
 
   async counts(userId: string) {
-    const [friends, incoming] = await Promise.all([
+    const [friends, incoming, unread] = await Promise.all([
       this.prisma.friendship.count({
         where: { status: 'ACCEPTED', OR: [{ requesterId: userId }, { addresseeId: userId }] },
       }),
       this.prisma.friendship.count({ where: { addresseeId: userId, status: 'PENDING' } }),
+      this.prisma.directMessage.count({ where: { recipientId: userId, readAt: null } }),
     ]);
-    return { friends, incomingRequests: incoming };
+    return { friends, incomingRequests: incoming, unreadMessages: unread };
+  }
+
+  // ── Direct messages (friends only) ──────────────────────────────────────────
+
+  private async assertFriends(a: string, b: string) {
+    if (a === b) throw new BadRequestException('Invalid recipient.');
+    const edge = await this.edge(a, b);
+    if (!edge || edge.status !== 'ACCEPTED') {
+      throw new BadRequestException('You can only message friends.');
+    }
+  }
+
+  async sendMessage(userId: string, recipientId: string, text: string, roomId?: string) {
+    await this.assertFriends(userId, recipientId);
+    const body = (text || '').trim().slice(0, 4000);
+    if (!body) throw new BadRequestException('Message cannot be empty.');
+    return this.prisma.directMessage.create({
+      data: { senderId: userId, recipientId, text: body, roomId: roomId || null },
+    });
+  }
+
+  async getConversation(userId: string, otherId: string, limit = 100) {
+    await this.assertFriends(userId, otherId);
+    const messages = await this.prisma.directMessage.findMany({
+      where: {
+        OR: [
+          { senderId: userId, recipientId: otherId },
+          { senderId: otherId, recipientId: userId },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    // Mark the incoming ones as read.
+    await this.prisma.directMessage.updateMany({
+      where: { senderId: otherId, recipientId: userId, readAt: null },
+      data: { readAt: new Date() },
+    });
+    return messages;
+  }
+
+  // Conversation list: one entry per friend we've exchanged messages with,
+  // with the last message and unread count. Built from recent messages.
+  async listThreads(userId: string) {
+    const recent = await this.prisma.directMessage.findMany({
+      where: { OR: [{ senderId: userId }, { recipientId: userId }] },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+
+    const byOther = new Map<
+      string,
+      { last: (typeof recent)[number]; unread: number }
+    >();
+    for (const m of recent) {
+      const other = m.senderId === userId ? m.recipientId : m.senderId;
+      const entry = byOther.get(other);
+      if (!entry) {
+        byOther.set(other, {
+          last: m,
+          unread: m.recipientId === userId && !m.readAt ? 1 : 0,
+        });
+      } else if (m.recipientId === userId && !m.readAt) {
+        entry.unread += 1;
+      }
+    }
+
+    const otherIds = [...byOther.keys()];
+    if (!otherIds.length) return [];
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: otherIds } },
+      select: this.publicUserSelect,
+    });
+    const cardById = new Map(users.map((u) => [u.id, this.toCard(u)]));
+
+    return [...byOther.entries()]
+      .map(([other, { last, unread }]) => ({
+        ...(cardById.get(other) || { userId: other, name: 'PrepSy Learner' }),
+        lastMessage: last.text,
+        lastAt: last.createdAt,
+        lastFromMe: last.senderId === userId,
+        unread,
+      }))
+      .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
   }
 }

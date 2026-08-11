@@ -46,6 +46,26 @@ export class FriendsController {
       .then((status) => ({ status }));
   }
 
+  @Get('threads')
+  threads(@Req() req: RequestWithUser) {
+    return this.friends.listThreads(this.uid(req));
+  }
+
+  @Get(':userId/messages')
+  conversation(@Param('userId') userId: string, @Req() req: RequestWithUser) {
+    return this.friends.getConversation(this.uid(req), userId);
+  }
+
+  @Post(':userId/messages')
+  sendMessage(
+    @Param('userId') userId: string,
+    @Body('text') text: string,
+    @Body('roomId') roomId: string | undefined,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.friends.sendMessage(this.uid(req), userId, text, roomId);
+  }
+
   @Post('request')
   request(@Body('userId') userId: string, @Req() req: RequestWithUser) {
     return this.friends.sendRequest(this.uid(req), userId);
