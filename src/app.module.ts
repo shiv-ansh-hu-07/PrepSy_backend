@@ -15,6 +15,7 @@ import { FocusAnalyticsModule } from './focus-analytics/focus-analytics.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PlaylistsModule } from './playlists/playlists.module';
 import { CohortsModule } from './cohorts/cohorts.module';
+import { FriendsModule } from './friends/friends.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -31,6 +32,7 @@ import { HealthController } from './health/health.controller';
     NotificationsModule,
     PlaylistsModule,
     CohortsModule,
+    FriendsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController, LivekitController, HealthController],

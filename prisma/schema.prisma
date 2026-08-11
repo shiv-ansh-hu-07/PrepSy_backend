@@ -34,7 +34,26 @@ model User {
   discussions       DiscussionPost[] @relation("UserDiscussions")
   quizAttempts      QuizAttempt[]    @relation("UserQuizAttempts")
 
+  friendRequestsSent     Friendship[] @relation("FriendRequestsSent")
+  friendRequestsReceived Friendship[] @relation("FriendRequestsReceived")
+
   @@unique([provider, providerId])
+}
+
+model Friendship {
+  id          String    @id @default(cuid())
+  requesterId String
+  addresseeId String
+  status      String    @default("PENDING") // PENDING | ACCEPTED
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  requester User @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("FriendRequestsReceived", fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
+  @@index([requesterId, status])
 }
 
 model UserProfile {

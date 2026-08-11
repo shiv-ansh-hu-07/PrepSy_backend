@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FriendsService } from '../friends/friends.service';
 
 type ProfileInput = Record<string, unknown>;
 type ProfileWriteData = Omit<
@@ -75,7 +76,10 @@ const recommendationLabels: Record<string, string> = {
 
 @Injectable()
 export class ProfilesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly friends: FriendsService,
+  ) {}
 
   async getMyProfile(userId: string) {
     try {
@@ -613,7 +617,14 @@ export class ProfilesService {
 
     scored.sort((a, b) => b.score - a.score || b.matchPercent - a.matchPercent);
     const withOverlap = scored.filter((p) => p.score > 0);
-    const peers = (withOverlap.length ? withOverlap : scored).slice(0, 40);
+    const top = (withOverlap.length ? withOverlap : scored).slice(0, 40);
+
+    // Annotate each peer with the current user's friendship status.
+    const statusMap = await this.friends.statusMap(
+      userId,
+      top.map((p) => p.userId),
+    );
+    const peers = top.map((p) => ({ ...p, friendStatus: statusMap[p.userId] || 'none' }));
 
     return { hasProfileSignals: myTags.size > 0, peers };
   }
