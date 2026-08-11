@@ -586,32 +586,16 @@ export class ProfilesService {
       const union = new Set([...myTags, ...theirTags]).size;
       const matchPercent = union ? Math.round((inter / union) * 100) : 0;
 
+      // Public/pre-friend view is intentionally minimal — name, avatar, bio and
+      // a match hint only. Personal details are revealed after friending
+      // (see getPublicProfile). score/matchPercent drive ranking.
       return {
         userId: p.userId,
         name: p.user?.name || p.username || 'PrepSy Learner',
-        username: p.username,
         avatarUrl: p.avatarUrl,
         bio: p.bio,
-        role: p.role,
-        company: p.company,
-        institutionName: p.institutionName,
-        city: p.city,
-        country: p.country,
-        experienceLevel: p.experienceLevel,
-        collaborationPreference: p.collaborationPreference,
-        goals: p.goals,
-        interests: p.interests,
-        examTargets: p.examTargets,
-        githubUrl: p.githubUrl,
-        linkedinUrl: p.linkedinUrl,
-        portfolioUrl: p.portfolioUrl,
         matchPercent,
         score,
-        sharedGoals,
-        sharedInterests,
-        sharedExamTargets,
-        sharedLanguages,
-        sameInstitution,
       };
     });
 
@@ -627,5 +611,85 @@ export class ProfilesService {
     const peers = top.map((p) => ({ ...p, friendStatus: statusMap[p.userId] || 'none' }));
 
     return { hasProfileSignals: myTags.size > 0, peers };
+  }
+
+  // Search all discoverable users by name/username (empty q = browse all).
+  // Returns the same minimal card as discovery + friendStatus.
+  async searchUsers(userId: string, q: string) {
+    const query = (q || '').trim();
+    const where: Prisma.UserWhereInput = {
+      id: { not: userId },
+      profile: { is: { isDiscoverable: true } },
+    };
+    if (query) {
+      where.OR = [
+        { name: { contains: query, mode: 'insensitive' } },
+        { profile: { is: { username: { contains: query, mode: 'insensitive' } } } },
+      ];
+    }
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true, name: true, profile: { select: { username: true, avatarUrl: true, bio: true } } },
+      take: 40,
+      orderBy: { name: 'asc' },
+    });
+    const statusMap = await this.friends.statusMap(userId, users.map((u) => u.id));
+    return users.map((u) => ({
+      userId: u.id,
+      name: u.name || u.profile?.username || 'PrepSy Learner',
+      avatarUrl: u.profile?.avatarUrl ?? null,
+      bio: u.profile?.bio ?? null,
+      friendStatus: statusMap[u.id] || 'none',
+    }));
+  }
+
+  // Full profile is only revealed to friends (or self). Otherwise minimal.
+  async getPublicProfile(viewerId: string, targetId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: targetId },
+      select: { id: true, name: true, profile: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    const p = user.profile;
+    const minimal = {
+      userId: user.id,
+      name: user.name || p?.username || 'PrepSy Learner',
+      avatarUrl: p?.avatarUrl ?? null,
+      bio: p?.bio ?? null,
+    };
+
+    const isSelf = viewerId === targetId;
+    const status = isSelf ? 'friends' : await this.friends.statusWith(viewerId, targetId);
+    const isFriend = isSelf || status === 'friends';
+    if (!isFriend || !p) {
+      return { ...minimal, isFriend: false, friendStatus: status };
+    }
+
+    return {
+      ...minimal,
+      isFriend: true,
+      friendStatus: 'friends',
+      username: p.username,
+      role: p.role,
+      company: p.company,
+      experienceLevel: p.experienceLevel,
+      workMode: p.workMode,
+      institutionName: p.institutionName,
+      institutionType: p.institutionType,
+      degree: p.degree,
+      branch: p.branch,
+      city: p.city,
+      country: p.country,
+      goals: p.goals,
+      interests: p.interests,
+      examTargets: p.examTargets,
+      skills: p.skills,
+      languages: p.languages,
+      collaborationPreference: p.collaborationPreference,
+      githubUrl: p.githubUrl,
+      linkedinUrl: p.linkedinUrl,
+      portfolioUrl: p.portfolioUrl,
+    };
   }
 }

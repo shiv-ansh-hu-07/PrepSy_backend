@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Put,
+  Query,
   Req,
   UnauthorizedException,
   UploadedFile,
@@ -43,6 +45,19 @@ export class ProfilesController {
   @Get('discover')
   discoverPeers(@Req() req: RequestWithUser) {
     return this.profilesService.discoverPeers(this.getUserId(req));
+  }
+
+  // Search all discoverable users by name/username (q optional).
+  @Get('search')
+  searchUsers(@Req() req: RequestWithUser, @Query('q') q?: string) {
+    return this.profilesService.searchUsers(this.getUserId(req), q || '');
+  }
+
+  // Another user's profile — full only if you're friends, else minimal.
+  // Kept last so it doesn't shadow the static routes above.
+  @Get(':userId')
+  getPublicProfile(@Param('userId') userId: string, @Req() req: RequestWithUser) {
+    return this.profilesService.getPublicProfile(this.getUserId(req), userId);
   }
 
   @Put('me')
