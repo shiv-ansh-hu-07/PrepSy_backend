@@ -100,6 +100,12 @@ export class CohortsController {
     return this.cohorts.getSessions(id, this.uid(req));
   }
 
+  // Current-day playback for a cohort room (drives the in-room player).
+  @Get('by-room/:roomId/current-session')
+  getRoomCurrentSession(@Param('roomId') roomId: string) {
+    return this.cohorts.getRoomCurrentSession(roomId);
+  }
+
   @Post(':id/sessions')
   createSession(
     @Param('id') id: string,

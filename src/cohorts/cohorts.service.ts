@@ -20,7 +20,15 @@ export interface CreateCohortInput {
   startMode?: 'NOW' | 'SCHEDULED';
   dailyTime?: string;
   startDate?: string;
-  sessions?: { topic: string; description?: string; studyHours?: number }[];
+  sessions?: {
+    topic: string;
+    description?: string;
+    studyHours?: number;
+    videoIds?: string[];
+    startSec?: number;
+    endSec?: number;
+    part?: string;
+  }[];
 }
 
 export interface UpdateCohortInput {
@@ -30,7 +38,15 @@ export interface UpdateCohortInput {
 }
 
 export interface SetPlanInput {
-  sessions?: { topic: string; description?: string; studyHours?: number }[];
+  sessions?: {
+    topic: string;
+    description?: string;
+    studyHours?: number;
+    videoIds?: string[];
+    startSec?: number;
+    endSec?: number;
+    part?: string;
+  }[];
   dailyTime?: string;
   startDate?: string;
 }
@@ -101,6 +117,10 @@ export class CohortsService {
             topic: s.topic,
             description: s.description ?? null,
             studyHours: s.studyHours ?? null,
+            videoIds: Array.isArray(s.videoIds) ? s.videoIds : [],
+            startSec: s.startSec ?? null,
+            endSec: s.endSec ?? null,
+            part: s.part ?? null,
             scheduledAt: this.addDays(firstStart, i),
             roomId,
             orderIndex: i,
@@ -222,6 +242,10 @@ export class CohortsService {
           topic: s.topic,
           description: s.description ?? null,
           studyHours: s.studyHours ?? null,
+          videoIds: Array.isArray(s.videoIds) ? s.videoIds : [],
+          startSec: s.startSec ?? null,
+          endSec: s.endSec ?? null,
+          part: s.part ?? null,
           scheduledAt: this.addDays(firstStart, i),
           roomId,
           orderIndex: i,
@@ -555,6 +579,42 @@ export class CohortsService {
       data: { progress: { ...baseProgress, caughtUp } },
     });
     return { sessionId, caughtUpByMe: done };
+  }
+
+  // Playback for a cohort room's current day: today's session if there is one,
+  // else the next upcoming, else the first. Returns null when the room isn't a
+  // cohort room. Drives the in-room player so it plays just that day's content.
+  async getRoomCurrentSession(roomId: string) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true },
+    });
+    if (!cohort) return null;
+
+    const { start, end } = this.dayBounds(new Date());
+    const session =
+      (await this.prisma.studySession.findFirst({
+        where: { cohortId: cohort.id, scheduledAt: { gte: start, lte: end } },
+        orderBy: { orderIndex: 'asc' },
+      })) ??
+      (await this.prisma.studySession.findFirst({
+        where: { cohortId: cohort.id, status: 'SCHEDULED', scheduledAt: { gt: end } },
+        orderBy: { scheduledAt: 'asc' },
+      })) ??
+      (await this.prisma.studySession.findFirst({
+        where: { cohortId: cohort.id },
+        orderBy: { orderIndex: 'asc' },
+      }));
+    if (!session) return null;
+
+    return {
+      id: session.id,
+      topic: session.topic,
+      videoIds: session.videoIds,
+      startSec: session.startSec,
+      endSec: session.endSec,
+      part: session.part,
+    };
   }
 
   async createSession(cohortId: string, userId: string, topic: string, scheduledAt: Date) {

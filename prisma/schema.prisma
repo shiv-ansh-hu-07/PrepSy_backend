@@ -303,6 +303,13 @@ model StudySession {
   studyHours  Float?   // planned study time for the day
   createdAt   DateTime @default(now())
 
+  // Playback for the in-room player: the day's video IDs, and (for a video
+  // sliced across days) the time segment + part label like "1/3".
+  videoIds    String[] @default([])
+  startSec    Int?
+  endSec      Int?
+  part        String?
+
   cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
 
   @@index([cohortId])
