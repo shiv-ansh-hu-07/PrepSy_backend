@@ -263,19 +263,26 @@ export class CohortsService {
     return d;
   }
 
+  // Day boundaries for the IST calendar day containing `date`, returned as UTC
+  // instants. The app targets Asia/Kolkata (UTC+5:30, no DST), so "today" must
+  // be an IST day — not the server-local (UTC) day, which would be off by one
+  // for evening-IST times.
   private dayBounds(date: Date) {
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(date.getTime() + IST_OFFSET_MS);
+    const y = ist.getUTCFullYear();
+    const m = ist.getUTCMonth();
+    const d = ist.getUTCDate();
+    const start = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+    const end = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
     return { start, end };
   }
 
   // ── Daily cohort session engine ─────────────────────────────────────────────
 
-  // Each morning: email members today's topic + room link, and arm the existing
-  // 15-minute room reminder for today's occurrence.
-  @Cron('0 8 * * *')
+  // Each morning (8 AM IST): email members today's topic + room link, and arm
+  // the existing 15-minute room reminder for today's occurrence.
+  @Cron('0 8 * * *', { timeZone: 'Asia/Kolkata' })
   async notifyTodaysCohortSessions() {
     const { start, end } = this.dayBounds(new Date());
     const sessions = await this.prisma.studySession.findMany({
@@ -313,10 +320,10 @@ export class CohortsService {
     }
   }
 
-  // Just after midnight: resolve yesterday's sessions. If anyone attended the
-  // room that day, mark it COMPLETED; otherwise POSTPONE it and shift every later
-  // scheduled session one day forward (nothing gets skipped).
-  @Cron('5 0 * * *')
+  // Just after midnight IST: resolve yesterday's sessions. If anyone attended
+  // the room that day, mark it COMPLETED; otherwise POSTPONE it and shift every
+  // later scheduled session one day forward (nothing gets skipped).
+  @Cron('5 0 * * *', { timeZone: 'Asia/Kolkata' })
   async resolveMissedCohortSessions() {
     const yesterday = this.addDays(new Date(), -1);
     const { start, end } = this.dayBounds(yesterday);
