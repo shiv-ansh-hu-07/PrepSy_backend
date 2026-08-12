@@ -4,13 +4,20 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { S3Service } from '../s3/s3.service';
 
 // Relationship of another user to the current user.
 export type FriendStatus = 'none' | 'friends' | 'outgoing' | 'incoming';
 
 @Injectable()
 export class FriendsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly s3: S3Service,
+  ) {}
+
+  // Ephemeral typing state: `${fromUserId}:${toUserId}` -> last-typed epoch ms.
+  private readonly typing = new Map<string, number>();
 
   private publicUserSelect = {
     id: true,
@@ -181,6 +188,43 @@ export class FriendsService {
     return this.prisma.directMessage.create({
       data: { senderId: userId, recipientId, text: body, roomId: roomId || null },
     });
+  }
+
+  async sendMedia(
+    userId: string,
+    recipientId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string },
+  ) {
+    await this.assertFriends(userId, recipientId);
+    const isImage = /^image\//i.test(file.mimetype);
+    const url = await this.s3.uploadChatMedia(
+      userId,
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
+    return this.prisma.directMessage.create({
+      data: {
+        senderId: userId,
+        recipientId,
+        text: isImage ? '' : file.originalname || 'File',
+        mediaUrl: url,
+        mediaType: isImage ? 'image' : 'file',
+        fileName: file.originalname || null,
+      },
+    });
+  }
+
+  // ── Typing indicator (ephemeral, in-memory) ────────────────────────────────
+  setTyping(from: string, to: string) {
+    this.typing.set(`${from}:${to}`, Date.now());
+    return { ok: true };
+  }
+
+  // Is `other` currently typing to `viewer`? (within the last 6s)
+  isTyping(viewer: string, other: string) {
+    const ts = this.typing.get(`${other}:${viewer}`);
+    return { typing: Boolean(ts && Date.now() - ts < 6000) };
   }
 
   async getConversation(userId: string, otherId: string, limit = 100) {

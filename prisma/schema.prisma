@@ -49,6 +49,9 @@ model DirectMessage {
   recipientId String
   text        String
   roomId      String? // set when the message is a room invite
+  mediaUrl    String? // set for shared media
+  mediaType   String? // "image" | "file"
+  fileName    String? // original filename for non-image media
   createdAt   DateTime  @default(now())
   readAt      DateTime?
 

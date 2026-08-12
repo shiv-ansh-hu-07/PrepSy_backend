@@ -66,4 +66,42 @@ export class S3Service {
 
     return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
   }
+
+  // Generic upload for chat media (images, docs, etc.). Returns the public URL.
+  async uploadChatMedia(
+    userId: string,
+    buffer: Buffer,
+    mimetype: string,
+    originalName: string,
+  ): Promise<string> {
+    if (!this.bucket) {
+      this.logger.error('S3_BUCKET_NAME is not configured');
+      throw new InternalServerErrorException('File storage is not configured');
+    }
+
+    const ext = extname(originalName).toLowerCase();
+    const key = `chat/${userId}/${uuidv4()}${ext}`;
+
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: buffer,
+          ContentType: mimetype || 'application/octet-stream',
+          CacheControl: 'public, max-age=31536000, immutable',
+        }),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown S3 upload error';
+      this.logger.error(`Chat media upload failed for ${userId}: ${message}`);
+      throw new BadRequestException('Failed to upload file. Please try again.');
+    }
+
+    if (this.cloudfrontDomain) {
+      return `https://${this.cloudfrontDomain}/${key}`;
+    }
+    return `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+  }
 }
