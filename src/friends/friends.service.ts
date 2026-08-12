@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
+import { DmGateway } from './dm.gateway';
 
 // Relationship of another user to the current user.
 export type FriendStatus = 'none' | 'friends' | 'outgoing' | 'incoming';
@@ -14,6 +15,7 @@ export class FriendsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly s3: S3Service,
+    private readonly dm: DmGateway,
   ) {}
 
   // Ephemeral typing state: `${fromUserId}:${toUserId}` -> last-typed epoch ms.
@@ -185,9 +187,11 @@ export class FriendsService {
     await this.assertFriends(userId, recipientId);
     const body = (text || '').trim().slice(0, 4000);
     if (!body) throw new BadRequestException('Message cannot be empty.');
-    return this.prisma.directMessage.create({
+    const message = await this.prisma.directMessage.create({
       data: { senderId: userId, recipientId, text: body, roomId: roomId || null },
     });
+    this.dm.emitMessage(message);
+    return message;
   }
 
   async sendMedia(
@@ -203,7 +207,7 @@ export class FriendsService {
       file.mimetype,
       file.originalname,
     );
-    return this.prisma.directMessage.create({
+    const message = await this.prisma.directMessage.create({
       data: {
         senderId: userId,
         recipientId,
@@ -213,6 +217,8 @@ export class FriendsService {
         fileName: file.originalname || null,
       },
     });
+    this.dm.emitMessage(message);
+    return message;
   }
 
   // ── Typing indicator (ephemeral, in-memory) ────────────────────────────────
