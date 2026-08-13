@@ -526,91 +526,130 @@ export class ProfilesService {
     return Boolean(value && typeof value === 'object' && !Array.isArray(value));
   }
 
-  // ── Peer discovery / matching ───────────────────────────────────────────────
-  // Rank other discoverable learners by shared study signals, so a student who
-  // "struggles alone" can find people prepping for the same thing.
+  // ── Peer recommendation engine ──────────────────────────────────────────────
+  // Ranks other discoverable learners on a weighted blend of what they study,
+  // interests, language, region, and study style — so a student who "struggles
+  // alone" finds the people most worth connecting with. Returns a minimal,
+  // privacy-safe card plus category-level reasons (never the person's raw data).
   async discoverPeers(userId: string) {
     const me = await this.prisma.userProfile.findUnique({ where: { userId } });
     const others = await this.prisma.userProfile.findMany({
       where: { isDiscoverable: true, userId: { not: userId } },
-      include: { user: { select: { id: true, name: true } } },
+      include: { user: { select: { id: true, name: true, lastLoginAt: true } } },
     });
 
     const norm = (arr?: string[] | null) =>
       (arr || []).map((s) => s.trim().toLowerCase()).filter(Boolean);
-    const overlap = (mine: Set<string>, theirs?: string[] | null) =>
-      (theirs || []).filter((v) => mine.has(v.trim().toLowerCase()));
-
-    const myGoals = new Set(norm(me?.goals));
-    const myInterests = new Set(norm(me?.interests));
-    const myExams = new Set(norm(me?.examTargets));
-    const mySkills = new Set(norm(me?.skills));
-    const myLangs = new Set(norm(me?.languages));
-    const myTags = new Set([...myGoals, ...myInterests, ...myExams, ...mySkills]);
+    const setOf = (arr?: string[] | null) => new Set(norm(arr));
+    const shared = (mine: Set<string>, theirs?: string[] | null) =>
+      norm(theirs).filter((t) => mine.has(t));
+    // Fraction of *my* items this candidate also has (rewards relevance without
+    // penalising people who simply list more things).
+    const coverage = (mine: Set<string>, theirs?: string[] | null) =>
+      mine.size ? shared(mine, theirs).length / mine.size : 0;
     const eq = (a?: string | null, b?: string | null) =>
       Boolean(a && b && a.trim().toLowerCase() === b.trim().toLowerCase());
 
+    const myStudy = setOf([...(me?.goals ?? []), ...(me?.examTargets ?? [])]);
+    const myInterests = setOf(me?.interests);
+    const mySkills = setOf(me?.skills);
+    const myLangs = setOf(me?.languages);
+    const hasProfileSignals =
+      myStudy.size + myInterests.size + mySkills.size + myLangs.size > 0 ||
+      Boolean(me?.city || me?.country);
+
+    // Weights sum to 1.0; study intent + language + region dominate, which is
+    // what actually makes two learners a good pairing.
+    const W = {
+      study: 0.3,
+      interests: 0.15,
+      skills: 0.1,
+      language: 0.15,
+      region: 0.15,
+      collab: 0.05,
+      experience: 0.05,
+      institution: 0.05,
+    };
+    const now = Date.now();
+    const activityBoost = (last?: Date | null) => {
+      if (!last) return 0;
+      const days = (now - new Date(last).getTime()) / 86_400_000;
+      if (days <= 7) return 0.06;
+      if (days <= 30) return 0.03;
+      return 0;
+    };
+
     const scored = others.map((p) => {
-      const sharedGoals = overlap(myGoals, p.goals);
-      const sharedInterests = overlap(myInterests, p.interests);
-      const sharedExamTargets = overlap(myExams, p.examTargets);
-      const sharedSkills = overlap(mySkills, p.skills);
-      const sharedLanguages = overlap(myLangs, p.languages);
-      const sameCollab =
-        Boolean(me?.collaborationPreference) &&
-        p.collaborationPreference === me?.collaborationPreference;
-      const sameInstitution = eq(me?.institutionName, p.institutionName);
-      const sameCity = eq(me?.city, p.city);
-      const sameExperience =
-        Boolean(me?.experienceLevel) && p.experienceLevel === me?.experienceLevel;
+      const studyScore = coverage(myStudy, [...(p.goals ?? []), ...(p.examTargets ?? [])]);
+      const interestScore = coverage(myInterests, p.interests);
+      const skillScore = coverage(mySkills, p.skills);
+      const sharedLangs = shared(myLangs, p.languages);
+      const languageScore =
+        myLangs.size && sharedLangs.length ? 0.5 + 0.5 * (sharedLangs.length / myLangs.size) : 0;
+
+      let regionScore = 0;
+      if (eq(me?.city, p.city)) regionScore = 1;
+      else if (eq(me?.state, p.state)) regionScore = 0.6;
+      else if (eq(me?.country, p.country)) regionScore = 0.3;
+
+      const collabScore =
+        me?.collaborationPreference && p.collaborationPreference === me.collaborationPreference ? 1 : 0;
+      const experienceScore =
+        me?.experienceLevel && p.experienceLevel === me.experienceLevel ? 1 : 0;
+      const institutionScore = eq(me?.institutionName, p.institutionName) ? 1 : 0;
 
       const score =
-        3 * sharedGoals.length +
-        3 * sharedExamTargets.length +
-        2 * sharedInterests.length +
-        1 * sharedSkills.length +
-        1 * sharedLanguages.length +
-        (sameCollab ? 2 : 0) +
-        (sameInstitution ? 3 : 0) +
-        (sameCity ? 1 : 0) +
-        (sameExperience ? 1 : 0);
+        W.study * studyScore +
+        W.interests * interestScore +
+        W.skills * skillScore +
+        W.language * languageScore +
+        W.region * regionScore +
+        W.collab * collabScore +
+        W.experience * experienceScore +
+        W.institution * institutionScore +
+        activityBoost(p.user?.lastLoginAt);
 
-      // Jaccard over the combined study-signal space for a friendly percent.
-      const theirTags = new Set([
-        ...norm(p.goals),
-        ...norm(p.interests),
-        ...norm(p.examTargets),
-        ...norm(p.skills),
-      ]);
-      const inter = [...myTags].filter((t) => theirTags.has(t)).length;
-      const union = new Set([...myTags, ...theirTags]).size;
-      const matchPercent = union ? Math.round((inter / union) * 100) : 0;
+      // Privacy-safe reasons: name the dimension that matched, not the value.
+      const reasons: string[] = [];
+      if (studyScore > 0) reasons.push('Studying similar things');
+      if (regionScore >= 1) reasons.push('In your city');
+      else if (regionScore >= 0.6) reasons.push('In your state');
+      else if (regionScore >= 0.3) reasons.push('In your country');
+      if (languageScore > 0) reasons.push('Speaks your language');
+      if (institutionScore) reasons.push('Same institution');
+      if (reasons.length < 2 && interestScore > 0) reasons.push('Shared interests');
+      if (reasons.length < 2 && collabScore) reasons.push('Similar study style');
 
-      // Public/pre-friend view is intentionally minimal — name, avatar, bio and
-      // a match hint only. Personal details are revealed after friending
-      // (see getPublicProfile). score/matchPercent drive ranking.
       return {
         userId: p.userId,
         name: p.user?.name || p.username || 'PrepSy Learner',
         avatarUrl: p.avatarUrl,
         bio: p.bio,
-        matchPercent,
+        reasons: reasons.slice(0, 3),
         score,
+        recency: p.user?.lastLoginAt ? new Date(p.user.lastLoginAt).getTime() : 0,
       };
     });
 
-    scored.sort((a, b) => b.score - a.score || b.matchPercent - a.matchPercent);
-    const withOverlap = scored.filter((p) => p.score > 0);
-    const top = (withOverlap.length ? withOverlap : scored).slice(0, 40);
+    // Drop people already friends (they live in the Friends tab).
+    const statusMap = await this.friends.statusMap(userId, scored.map((p) => p.userId));
+    const candidates = scored.filter((p) => (statusMap[p.userId] || 'none') !== 'friends');
 
-    // Annotate each peer with the current user's friendship status.
-    const statusMap = await this.friends.statusMap(
-      userId,
-      top.map((p) => p.userId),
-    );
-    const peers = top.map((p) => ({ ...p, friendStatus: statusMap[p.userId] || 'none' }));
+    const matched = candidates.filter((p) => p.score > 0.02).sort((a, b) => b.score - a.score);
+    // Cold start (no profile signals or no matches): show recently-active people.
+    const fallback = [...candidates].sort((a, b) => b.recency - a.recency);
+    const ranked = matched.length ? matched : fallback;
 
-    return { hasProfileSignals: myTags.size > 0, peers };
+    const peers = ranked.slice(0, 40).map((p) => ({
+      userId: p.userId,
+      name: p.name,
+      avatarUrl: p.avatarUrl,
+      bio: p.bio,
+      reasons: p.reasons,
+      friendStatus: statusMap[p.userId] || 'none',
+    }));
+
+    return { hasProfileSignals, peers };
   }
 
   // Search all discoverable users by name/username (empty q = browse all).
