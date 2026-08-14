@@ -5,16 +5,29 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { S3Service } from '../s3/s3.service';
 
 @Injectable()
 export class CommunityService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly s3: S3Service,
+  ) {}
+
+  async uploadImage(
+    userId: string,
+    file: { buffer: Buffer; mimetype: string; originalname: string },
+  ) {
+    const url = await this.s3.uploadChatMedia(userId, file.buffer, file.mimetype, file.originalname);
+    return { url };
+  }
 
   private readonly postSummarySelect = {
     id: true,
     title: true,
     content: true,
     applicationLink: true,
+    imageUrl: true,
     tags: true,
     createdAt: true,
     updatedAt: true,
@@ -74,6 +87,7 @@ export class CommunityService {
     title: string;
     content: string;
     applicationLink: string | null;
+    imageUrl: string | null;
     tags: string[];
     createdAt: Date;
     updatedAt: Date;
@@ -91,6 +105,7 @@ export class CommunityService {
       title: post.title,
       content: post.content,
       applicationLink: post.applicationLink,
+      imageUrl: post.imageUrl,
       tags: post.tags,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
@@ -215,6 +230,7 @@ export class CommunityService {
     content: string,
     tags?: string[],
     applicationLink?: string,
+    imageUrl?: string,
   ) {
     const cleanTitle = title?.trim();
     const cleanContent = content?.trim();
@@ -245,6 +261,7 @@ export class CommunityService {
         title: cleanTitle,
         content: cleanContent,
         applicationLink: this.normalizeApplicationLink(applicationLink),
+        imageUrl: imageUrl?.trim() || null,
         tags: this.normalizeTags(tags),
       },
       select: this.postSummarySelect,

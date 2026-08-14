@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -9,8 +10,12 @@ import {
   Query,
   Req,
   UnauthorizedException,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { CommunityService } from './community.service';
 import type { RequestWithUser } from '../auth/auth-user.interface';
@@ -51,6 +56,7 @@ export class CommunityController {
     @Body('content') content: string,
     @Body('tags') tags?: string[],
     @Body('applicationLink') applicationLink?: string,
+    @Body('imageUrl') imageUrl?: string,
   ) {
     return this.communityService.createPost(
       this.getUserId(req),
@@ -58,7 +64,23 @@ export class CommunityController {
       content,
       tags,
       applicationLink,
+      imageUrl,
     );
+  }
+
+  @Post('upload')
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) =>
+        cb(null, /^image\//i.test(file.mimetype)),
+    }),
+  )
+  uploadImage(@Req() req: RequestWithUser, @UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException('No image provided.');
+    return this.communityService.uploadImage(this.getUserId(req), file);
   }
 
   @Post('posts/:postId/replies')
