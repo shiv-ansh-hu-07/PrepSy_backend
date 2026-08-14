@@ -86,6 +86,11 @@ export class RoomsController {
     return this.roomsService.getMyRooms(this.getUserId(req));
   }
 
+  @Get('recommended')
+  recommendedRooms(@Req() req: RequestWithUser) {
+    return this.roomsService.recommendedRooms(this.getUserId(req));
+  }
+
   @Public()
   @Get(':roomId/video-summary')
   getVideoSummary(@Param('roomId') roomId: string) {

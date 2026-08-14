@@ -362,6 +362,66 @@ export class CohortsService {
     }
   }
 
+  // Recommend cohorts the user isn't in, matched on how well the playlist topic
+  // overlaps their study signals, with a boost for popular cohorts.
+  async recommendedCohorts(userId: string) {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { goals: true, interests: true, examTargets: true, skills: true },
+    });
+    const words = (arr?: string[] | null) =>
+      (arr ?? []).flatMap((s) => s.toLowerCase().split(/[^a-z0-9]+/)).filter((w) => w.length >= 3);
+    const tokens = new Set([
+      ...words(profile?.goals),
+      ...words(profile?.interests),
+      ...words(profile?.examTargets),
+      ...words(profile?.skills),
+    ]);
+
+    const cohorts = await this.prisma.cohort.findMany({
+      where: { members: { none: { userId } } },
+      include: {
+        playlist: { select: { title: true, channelTitle: true, thumbnailUrl: true } },
+        _count: { select: { members: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 60,
+    });
+
+    const scored = cohorts.map((c) => {
+      const hay = new Set(
+        `${c.name} ${c.playlist?.title ?? ''} ${c.playlist?.channelTitle ?? ''}`
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(Boolean),
+      );
+      const matched = [...tokens].filter((t) => hay.has(t)).length;
+      const members = c._count.members;
+      return {
+        id: c.id,
+        name: c.name,
+        playlistTitle: c.playlist?.title ?? null,
+        thumbnailUrl: c.playlist?.thumbnailUrl ?? null,
+        memberCount: members,
+        matched,
+        score: matched * 5 + Math.min(members, 5),
+      };
+    });
+
+    const withMatch = scored.filter((c) => c.matched > 0).sort((a, b) => b.score - a.score);
+    const fallback = [...scored].sort((a, b) => b.memberCount - a.memberCount);
+    const ranked = withMatch.length ? withMatch : fallback;
+
+    return ranked.slice(0, 8).map((c) => ({
+      id: c.id,
+      name: c.name,
+      playlistTitle: c.playlistTitle,
+      thumbnailUrl: c.thumbnailUrl,
+      memberCount: c.memberCount,
+      reason: c.matched > 0 ? 'Matches your interests' : 'Popular cohort',
+    }));
+  }
+
   async listUserCohorts(userId: string) {
     return this.prisma.cohort.findMany({
       where: { members: { some: { userId } } },

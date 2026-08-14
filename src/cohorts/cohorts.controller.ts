@@ -47,6 +47,12 @@ export class CohortsController {
     return this.cohorts.listUserCohorts(this.uid(req));
   }
 
+  // Static route declared before ':id' so it isn't captured as an id.
+  @Get('recommended')
+  recommended(@Req() req: RequestWithUser) {
+    return this.cohorts.recommendedCohorts(this.uid(req));
+  }
+
   @Get(':id')
   get(@Param('id') id: string, @Req() req: RequestWithUser) {
     return this.cohorts.getCohort(id, this.uid(req));

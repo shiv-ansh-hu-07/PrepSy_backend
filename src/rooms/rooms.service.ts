@@ -586,6 +586,85 @@ export class RoomsService {
     };
   }
 
+  // Recommend public rooms to join, matched on the user's study signals
+  // (tags), language and collaboration style, with a boost for live rooms.
+  async recommendedRooms(userId: string) {
+    const profile = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: {
+        goals: true,
+        interests: true,
+        examTargets: true,
+        skills: true,
+        languages: true,
+        collaborationPreference: true,
+        gender: true,
+      },
+    });
+    const norm = (arr?: string[] | null) =>
+      (arr ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const signals = new Set(
+      norm([
+        ...(profile?.goals ?? []),
+        ...(profile?.interests ?? []),
+        ...(profile?.examTargets ?? []),
+        ...(profile?.skills ?? []),
+      ]),
+    );
+    const myLangs = new Set(norm(profile?.languages));
+    const isFemale = /wom|female|girl/i.test(profile?.gender ?? '');
+
+    const memberships = await this.prisma.roomMember.findMany({
+      where: { userId },
+      select: { roomId: true },
+    });
+    const myRoomIds = new Set(memberships.map((m) => m.roomId));
+
+    const rooms = await this.prisma.room.findMany({
+      where: { visibility: 'PUBLIC' },
+      select: {
+        ...this.roomListSelect,
+        preferredLanguages: true,
+        collaborationStyle: true,
+        femaleOnly: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 80,
+    });
+
+    const eligible = rooms.filter(
+      (r) => !myRoomIds.has(r.roomId) && r.ownerId !== userId && (!r.femaleOnly || isFemale),
+    );
+    const withCounts = await this.attachActiveUserCounts(eligible);
+
+    const scored = withCounts.map((r) => {
+      const tagMatch = norm(r.tags).filter((t) => signals.has(t)).length;
+      const langMatch = norm(r.preferredLanguages).filter((l) => myLangs.has(l)).length;
+      const collab =
+        r.collaborationStyle &&
+        profile?.collaborationPreference &&
+        r.collaborationStyle === profile.collaborationPreference
+          ? 1
+          : 0;
+      const live = r.activeUsers > 0 ? 2 : this.shouldShowPublicRoom(r) ? 1 : 0;
+      const score = 3 * tagMatch + 2 * langMatch + collab + live;
+
+      const reasons: string[] = [];
+      if (tagMatch) reasons.push('Matches your goals');
+      if (langMatch) reasons.push('Your language');
+      if (r.activeUsers > 0) reasons.push('Live now');
+      return { ...r, score, reasons };
+    });
+
+    const withMatch = scored
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score || b.activeUsers - a.activeUsers);
+    const fallback = [...scored].sort((a, b) => b.activeUsers - a.activeUsers);
+    const ranked = withMatch.length ? withMatch : fallback;
+
+    return { rooms: await this.attachCohortFlag(ranked.slice(0, 8)) };
+  }
+
   async getVideoSummary(roomId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
