@@ -937,4 +937,83 @@ export class StatsService {
 
     return now >= currentWindow.start && now <= currentWindow.end;
   }
+
+  // Monday 00:00 in Asia/Kolkata, as a UTC instant.
+  private weekStartUtc(): Date {
+    const IST = 5.5 * 3600 * 1000;
+    const nowIst = new Date(Date.now() + IST);
+    const dowMon = (nowIst.getUTCDay() + 6) % 7; // 0 = Monday
+    const istMidnight = Date.UTC(nowIst.getUTCFullYear(), nowIst.getUTCMonth(), nowIst.getUTCDate());
+    return new Date(istMidnight - dowMon * 86_400_000 - IST);
+  }
+
+  // Focus-time leaderboard. scope: 'friends' (me + accepted friends) or
+  // 'global'; period: 'week' (this IST week) or 'all'.
+  async getLeaderboard(
+    userId: string,
+    scope: 'friends' | 'global',
+    period: 'week' | 'all',
+  ) {
+    const gte = period === 'all' ? undefined : this.weekStartUtc();
+
+    let userFilter: string[] | undefined;
+    if (scope === 'friends') {
+      const edges = await this.prisma.friendship.findMany({
+        where: { status: 'ACCEPTED', OR: [{ requesterId: userId }, { addresseeId: userId }] },
+        select: { requesterId: true, addresseeId: true },
+      });
+      const ids = new Set<string>([userId]);
+      edges.forEach((e) => {
+        ids.add(e.requesterId);
+        ids.add(e.addresseeId);
+      });
+      userFilter = [...ids];
+    }
+
+    const grouped = await this.prisma.focusSession.groupBy({
+      by: ['userId'],
+      _sum: { durationMinutes: true },
+      where: {
+        ...(gte ? { sessionDate: { gte } } : {}),
+        ...(userFilter ? { userId: { in: userFilter } } : {}),
+      },
+    });
+
+    const rows = grouped
+      .map((g) => ({ userId: g.userId, minutes: g._sum.durationMinutes ?? 0 }))
+      .filter((r) => r.minutes > 0)
+      .sort((a, b) => b.minutes - a.minutes);
+
+    const myIndex = rows.findIndex((r) => r.userId === userId);
+    const top = rows.slice(0, 50);
+
+    const ids = new Set(top.map((r) => r.userId));
+    ids.add(userId);
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, name: true, profile: { select: { avatarUrl: true } } },
+    });
+    const byId = new Map(users.map((u) => [u.id, u]));
+
+    const entries = top.map((r, i) => ({
+      rank: i + 1,
+      userId: r.userId,
+      name: byId.get(r.userId)?.name || 'PrepSy Learner',
+      avatarUrl: byId.get(r.userId)?.profile?.avatarUrl ?? null,
+      focusMinutes: r.minutes,
+      isMe: r.userId === userId,
+    }));
+
+    return {
+      scope,
+      period,
+      entries,
+      me: {
+        rank: myIndex >= 0 ? myIndex + 1 : null,
+        focusMinutes: myIndex >= 0 ? rows[myIndex].minutes : 0,
+        name: byId.get(userId)?.name || 'You',
+        avatarUrl: byId.get(userId)?.profile?.avatarUrl ?? null,
+      },
+    };
+  }
 }

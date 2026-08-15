@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -30,5 +31,19 @@ export class StatsController {
   @UseGuards(JwtAuthGuard)
   getMyAnalytics(@Req() req: RequestWithUser) {
     return this.statsService.getUserAnalytics(this.getUserId(req));
+  }
+
+  @Get('leaderboard')
+  @UseGuards(JwtAuthGuard)
+  getLeaderboard(
+    @Req() req: RequestWithUser,
+    @Query('scope') scope?: string,
+    @Query('period') period?: string,
+  ) {
+    return this.statsService.getLeaderboard(
+      this.getUserId(req),
+      scope === 'friends' ? 'friends' : 'global',
+      period === 'all' ? 'all' : 'week',
+    );
   }
 }
