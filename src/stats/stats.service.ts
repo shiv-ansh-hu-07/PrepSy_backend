@@ -979,10 +979,23 @@ export class StatsService {
       },
     });
 
-    const rows = grouped
-      .map((g) => ({ userId: g.userId, minutes: g._sum.durationMinutes ?? 0 }))
-      .filter((r) => r.minutes > 0)
-      .sort((a, b) => b.minutes - a.minutes);
+    const minutesById = new Map(
+      grouped.map((g) => [g.userId, g._sum.durationMinutes ?? 0]),
+    );
+
+    // Friends board: always list me + every accepted friend, even with 0
+    // focus minutes this period, so you can always see who you're competing
+    // with. Global board: only people who actually logged focus time.
+    const rows = (
+      scope === 'friends' && userFilter
+        ? userFilter.map((id) => ({
+            userId: id,
+            minutes: minutesById.get(id) ?? 0,
+          }))
+        : grouped
+            .map((g) => ({ userId: g.userId, minutes: g._sum.durationMinutes ?? 0 }))
+            .filter((r) => r.minutes > 0)
+    ).sort((a, b) => b.minutes - a.minutes);
 
     const myIndex = rows.findIndex((r) => r.userId === userId);
     const top = rows.slice(0, 50);
