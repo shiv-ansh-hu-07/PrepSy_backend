@@ -33,6 +33,12 @@ export class StatsController {
     return this.statsService.getUserAnalytics(this.getUserId(req));
   }
 
+  @Get('mastery')
+  @UseGuards(JwtAuthGuard)
+  getMastery(@Req() req: RequestWithUser) {
+    return this.statsService.getUserMastery(this.getUserId(req));
+  }
+
   @Get('leaderboard')
   @UseGuards(JwtAuthGuard)
   getLeaderboard(

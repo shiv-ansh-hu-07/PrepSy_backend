@@ -1029,4 +1029,57 @@ export class StatsService {
       },
     };
   }
+
+  // Concept mastery: read the user's quiz attempts, score each question against
+  // its stored answer, and aggregate per question topic into strong / weak /
+  // developing concepts. (Questions generated before topic-tagging bucket into
+  // "General".)
+  async getUserMastery(userId: string) {
+    const attempts = await this.prisma.quizAttempt.findMany({
+      where: { userId },
+      select: { questions: true, answers: true },
+      orderBy: { completedAt: 'desc' },
+      take: 200,
+    });
+
+    const byTopic = new Map<string, { attempted: number; correct: number }>();
+    let totalQ = 0;
+    let totalCorrect = 0;
+
+    for (const a of attempts) {
+      const qs = Array.isArray(a.questions) ? (a.questions as unknown[]) : [];
+      const ans = Array.isArray(a.answers) ? (a.answers as unknown[]) : [];
+      qs.forEach((qRaw, i) => {
+        if (!qRaw || typeof qRaw !== 'object') return;
+        const q = qRaw as Record<string, unknown>;
+        const topic =
+          typeof q.topic === 'string' && q.topic.trim() ? q.topic.trim() : 'General';
+        const correct = ans[i] !== undefined && ans[i] === q.answer;
+        const e = byTopic.get(topic) || { attempted: 0, correct: 0 };
+        e.attempted += 1;
+        e.correct += correct ? 1 : 0;
+        byTopic.set(topic, e);
+        totalQ += 1;
+        totalCorrect += correct ? 1 : 0;
+      });
+    }
+
+    const topics = [...byTopic.entries()]
+      .map(([topic, e]) => {
+        const accuracy = e.attempted ? Math.round((e.correct / e.attempted) * 100) : 0;
+        const level =
+          e.attempted < 3 ? 'developing' : accuracy >= 70 ? 'strong' : accuracy < 50 ? 'weak' : 'developing';
+        return { topic, attempted: e.attempted, correct: e.correct, accuracy, level };
+      })
+      .sort((a, b) => a.accuracy - b.accuracy);
+
+    return {
+      quizzesTaken: attempts.length,
+      totalQuestions: totalQ,
+      overallAccuracy: totalQ ? Math.round((totalCorrect / totalQ) * 100) : 0,
+      weak: topics.filter((t) => t.level === 'weak'),
+      strong: topics.filter((t) => t.level === 'strong').sort((a, b) => b.accuracy - a.accuracy),
+      developing: topics.filter((t) => t.level === 'developing'),
+    };
+  }
 }
