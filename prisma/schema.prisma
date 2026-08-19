@@ -420,3 +420,24 @@ model CommunityReply {
   @@index([postId, createdAt])
   @@index([authorId, createdAt(sort: Desc)])
 }
+
+// ── Product analytics ─────────────────────────────────────────────────────────
+// Lightweight event stream for measuring activation, WAU and retention before
+// the September test cohort. Intentionally FK-less (like RoomAttendance): events
+// are analytics facts that should survive user deletion, and anonymous
+// (pre-signup) events legitimately have no userId.
+model Event {
+  id        String   @id @default(cuid())
+  name      String
+  userId    String?  // null for anonymous / pre-signup events
+  anonId    String?  // client-generated id, stitches pre-signup → signed-up user
+  sessionId String?  // groups events from one app/tab session
+  path      String?  // page path where a frontend event fired
+  props     Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+  @@index([userId, createdAt])
+  @@index([anonId, createdAt])
+  @@index([createdAt])
+}
