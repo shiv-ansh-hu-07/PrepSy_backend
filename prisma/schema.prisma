@@ -248,6 +248,13 @@ model FocusSession {
   lowFocusPercent    Int @default(0)
   totalSamples       Int @default(0)
 
+  // Detailed breakdown from the MediaPipe monitor (typed distractions + streak).
+  noteTakingPercent     Int @default(0)
+  phonePercent          Int @default(0)
+  drowsinessPercent     Int @default(0)
+  lookAwayPercent       Int @default(0)
+  longestFocusStreakSec Int @default(0)
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, sessionDate(sort: Desc)])

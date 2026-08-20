@@ -13,6 +13,11 @@ interface SaveFocusDto {
   medFocusPercent: number;
   lowFocusPercent: number;
   totalSamples: number;
+  noteTakingPercent?: number;
+  phonePercent?: number;
+  drowsinessPercent?: number;
+  lookAwayPercent?: number;
+  longestFocusStreakSec?: number;
 }
 
 const clamp = (v: number) => Math.round(Math.max(0, Math.min(100, v)));
@@ -36,6 +41,11 @@ export class FocusAnalyticsService {
         medFocusPercent: clamp(dto.medFocusPercent),
         lowFocusPercent: clamp(dto.lowFocusPercent),
         totalSamples: Math.max(0, dto.totalSamples),
+        noteTakingPercent: clamp(dto.noteTakingPercent ?? 0),
+        phonePercent: clamp(dto.phonePercent ?? 0),
+        drowsinessPercent: clamp(dto.drowsinessPercent ?? 0),
+        lookAwayPercent: clamp(dto.lookAwayPercent ?? 0),
+        longestFocusStreakSec: Math.max(0, Math.round(dto.longestFocusStreakSec ?? 0)),
       },
     });
   }
@@ -105,6 +115,11 @@ export class FocusAnalyticsService {
         highFocusPercent: s.highFocusPercent,
         medFocusPercent: s.medFocusPercent,
         lowFocusPercent: s.lowFocusPercent,
+        noteTakingPercent: s.noteTakingPercent,
+        phonePercent: s.phonePercent,
+        drowsinessPercent: s.drowsinessPercent,
+        lookAwayPercent: s.lookAwayPercent,
+        longestFocusStreakSec: s.longestFocusStreakSec,
       })),
     };
   }
