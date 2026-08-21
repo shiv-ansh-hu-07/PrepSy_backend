@@ -33,6 +33,11 @@ export class FocusAnalyticsController {
     return this.svc.getSummary(this.uid(req));
   }
 
+  @Get('insight')
+  insight(@Req() req: RequestWithUser) {
+    return this.svc.getInsight(this.uid(req));
+  }
+
   @Get('room/:roomId')
   byRoom(@Req() req: RequestWithUser, @Param('roomId') roomId: string) {
     return this.svc.getLatestForRoom(this.uid(req), roomId);

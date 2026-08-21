@@ -1,5 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import axios from 'axios';
+
+const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 
 interface SaveFocusDto {
   roomId: string;
@@ -129,5 +132,36 @@ export class FocusAnalyticsService {
       where: { userId, roomId },
       orderBy: { sessionDate: 'desc' },
     });
+  }
+
+  // AI coaching from the user's numeric focus history (no video ever sent).
+  async getInsight(userId: string) {
+    const summary = await this.getSummary(userId);
+    if (!summary.totalAnalyzedSessions) {
+      return { empty: true, headline: '', insights: [], tip: '' };
+    }
+    try {
+      const { data } = await axios.post(
+        `${AI_URL}/focus-insight`,
+        {
+          avgFocusScore: summary.avgFocusScore,
+          avgEngagementScore: summary.avgEngagementScore,
+          bestFocusScore: summary.bestFocusScore,
+          trend: summary.trend,
+          totalAnalyzedSessions: summary.totalAnalyzedSessions,
+          recentSessions: summary.recentSessions,
+        },
+        { timeout: 60_000 },
+      );
+      return { empty: false, ...data };
+    } catch (err) {
+      const detail =
+        axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
+          ? err.response.data.detail
+          : err instanceof Error
+            ? err.message
+            : 'AI service unavailable';
+      throw new InternalServerErrorException(`Focus insight failed: ${detail}`);
+    }
   }
 }
