@@ -167,6 +167,7 @@ model Room {
   members  RoomMember[]
   messages Message[]
   pomodoro Pomodoro?
+  videoState RoomVideoState?
 
   @@index([ownerId, createdAt])
 }
@@ -210,6 +211,20 @@ model Pomodoro {
   updatedAt DateTime @updatedAt
 
   room Room @relation(fields: [roomId], references: [roomId])
+}
+
+// Persistent playback memory for a YouTube watch-party room, so anyone joining
+// (even an empty room) resumes the current video + position instead of restarting
+// from video 1. Per-room; last-write-wins across synced participants.
+model RoomVideoState {
+  id          String   @id @default(cuid())
+  roomId      String   @unique
+  videoId     String?
+  positionSec Int      @default(0)
+  playing     Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
 }
 
 model RoomAttendance {

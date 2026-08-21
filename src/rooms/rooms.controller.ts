@@ -107,6 +107,24 @@ export class RoomsController {
     return this.roomsService.leaveRoom(roomId, this.getUserId(req));
   }
 
+  // Playback memory — public so watch-party guests resume too (like the P2P sync).
+  @Public()
+  @Get(':roomId/video-state')
+  getVideoState(@Param('roomId') roomId: string) {
+    return this.roomsService.getVideoState(roomId);
+  }
+
+  @Public()
+  @Post(':roomId/video-state')
+  saveVideoState(
+    @Param('roomId') roomId: string,
+    @Body('videoId') videoId?: string,
+    @Body('positionSec') positionSec?: number,
+    @Body('playing') playing?: boolean,
+  ) {
+    return this.roomsService.saveVideoState(roomId, { videoId, positionSec, playing });
+  }
+
   @Get('search')
   searchRoomsByTags(@Query('tags') tags: string) {
     const tagArray = tags

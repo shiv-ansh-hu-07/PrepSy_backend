@@ -780,6 +780,30 @@ export class RoomsService {
     };
   }
 
+  // Persistent playback memory for a watch-party room (resume where left off).
+  async getVideoState(roomId: string) {
+    return this.prisma.roomVideoState.findUnique({ where: { roomId } });
+  }
+
+  async saveVideoState(
+    roomId: string,
+    data: { videoId?: string | null; positionSec?: number; playing?: boolean },
+  ) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      select: { roomId: true },
+    });
+    if (!room) throw new NotFoundException('Room not found');
+    const videoId = data.videoId ?? null;
+    const positionSec = Math.max(0, Math.round(Number(data.positionSec) || 0));
+    const playing = Boolean(data.playing);
+    return this.prisma.roomVideoState.upsert({
+      where: { roomId },
+      create: { roomId, videoId, positionSec, playing },
+      update: { videoId, positionSec, playing },
+    });
+  }
+
   async joinRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
