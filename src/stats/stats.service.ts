@@ -970,18 +970,29 @@ export class StatsService {
       userFilter = [...ids];
     }
 
-    const grouped = await this.prisma.focusSession.groupBy({
-      by: ['userId'],
-      _sum: { durationMinutes: true },
+    // Rank by RoomAttendance minutes (same source as "Total Focus Time") so ALL
+    // studying counts — YouTube co-learning watch parties and camera-off rooms
+    // included — not just camera-monitored FocusSessions. RoomAttendance has no
+    // duration column, so sum (leftAt − joinedAt) over completed rows, matching
+    // getAttendanceMinutes().
+    const attendanceRows = await this.prisma.roomAttendance.findMany({
       where: {
-        ...(gte ? { sessionDate: { gte } } : {}),
+        leftAt: { not: null },
+        ...(gte ? { joinedAt: { gte } } : {}),
         ...(userFilter ? { userId: { in: userFilter } } : {}),
       },
+      select: { userId: true, joinedAt: true, leftAt: true },
     });
 
-    const minutesById = new Map(
-      grouped.map((g) => [g.userId, g._sum.durationMinutes ?? 0]),
-    );
+    const minutesById = new Map<string, number>();
+    for (const a of attendanceRows) {
+      if (!a.leftAt) continue;
+      const mins = Math.max(
+        0,
+        Math.round((a.leftAt.getTime() - a.joinedAt.getTime()) / 60000),
+      );
+      minutesById.set(a.userId, (minutesById.get(a.userId) ?? 0) + mins);
+    }
 
     // Friends board: always list me + every accepted friend, even with 0
     // focus minutes this period, so you can always see who you're competing
@@ -992,8 +1003,8 @@ export class StatsService {
             userId: id,
             minutes: minutesById.get(id) ?? 0,
           }))
-        : grouped
-            .map((g) => ({ userId: g.userId, minutes: g._sum.durationMinutes ?? 0 }))
+        : [...minutesById.entries()]
+            .map(([id, minutes]) => ({ userId: id, minutes }))
             .filter((r) => r.minutes > 0)
     ).sort((a, b) => b.minutes - a.minutes);
 
