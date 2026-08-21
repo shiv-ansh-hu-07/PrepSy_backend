@@ -109,4 +109,74 @@ export class AnalyticsService {
       })),
     };
   }
+
+  // Per-tester activity — the September view. For each signed-in user seen in the
+  // event stream: their funnel milestones, distinct active days, first/last seen.
+  async getTesters() {
+    const events = await this.prisma.event.findMany({
+      where: { userId: { not: null } },
+      select: { userId: true, name: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10); // UTC day
+    type Row = {
+      userId: string;
+      events: number;
+      firstSeen: Date;
+      lastSeen: Date;
+      days: Set<string>;
+      signedUp: boolean;
+      joinedRoom: boolean;
+      completedSession: boolean;
+    };
+    const map = new Map<string, Row>();
+    for (const e of events) {
+      const uid = e.userId as string;
+      let r = map.get(uid);
+      if (!r) {
+        r = {
+          userId: uid,
+          events: 0,
+          firstSeen: e.createdAt,
+          lastSeen: e.createdAt,
+          days: new Set(),
+          signedUp: false,
+          joinedRoom: false,
+          completedSession: false,
+        };
+        map.set(uid, r);
+      }
+      r.events += 1;
+      r.lastSeen = e.createdAt;
+      r.days.add(dayKey(e.createdAt));
+      if (e.name === 'signup_completed') r.signedUp = true;
+      if (e.name === 'room_joined') r.joinedRoom = true;
+      if (e.name === 'session_completed') r.completedSession = true;
+    }
+
+    const ids = [...map.keys()];
+    const users = ids.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: ids } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u]));
+
+    return [...map.values()]
+      .map((r) => ({
+        userId: r.userId,
+        name: userById.get(r.userId)?.name ?? null,
+        email: userById.get(r.userId)?.email ?? null,
+        events: r.events,
+        activeDays: r.days.size,
+        firstSeen: r.firstSeen,
+        lastSeen: r.lastSeen,
+        signedUp: r.signedUp,
+        joinedRoom: r.joinedRoom,
+        completedSession: r.completedSession,
+      }))
+      .sort((a, b) => b.lastSeen.getTime() - a.lastSeen.getTime());
+  }
 }

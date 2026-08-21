@@ -41,12 +41,10 @@ export class AnalyticsController {
     return this.svc.trackBatch(this.uid(req), body?.events || []);
   }
 
-  // Founder-only metrics. Fail-closed: access is granted ONLY to emails listed
-  // in ANALYTICS_ADMIN_EMAILS (comma-separated). If the env is unset/empty, or
-  // the caller's email isn't listed, access is denied — nobody gets in by default.
-  @Get('summary')
-  @UseGuards(JwtAuthGuard)
-  summary(@Req() req: RequestWithUser) {
+  // Founder-only gate. Fail-closed: access is granted ONLY to emails listed in
+  // ANALYTICS_ADMIN_EMAILS (comma-separated). If the env is unset/empty, or the
+  // caller's email isn't listed, access is denied — nobody gets in by default.
+  private assertFounder(req: RequestWithUser) {
     const allow = (process.env.ANALYTICS_ADMIN_EMAILS || '')
       .split(',')
       .map((s) => s.trim().toLowerCase())
@@ -55,6 +53,20 @@ export class AnalyticsController {
     if (!allow.length || !email || !allow.includes(email)) {
       throw new ForbiddenException('Not authorized for analytics');
     }
+  }
+
+  @Get('summary')
+  @UseGuards(JwtAuthGuard)
+  summary(@Req() req: RequestWithUser) {
+    this.assertFounder(req);
     return this.svc.getSummary();
+  }
+
+  // Per-tester activity table — the September view.
+  @Get('testers')
+  @UseGuards(JwtAuthGuard)
+  testers(@Req() req: RequestWithUser) {
+    this.assertFounder(req);
+    return this.svc.getTesters();
   }
 }
