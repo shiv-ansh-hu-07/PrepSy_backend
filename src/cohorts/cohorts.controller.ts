@@ -123,6 +123,17 @@ export class CohortsController {
     return this.cohorts.getRoomCurrentSession(roomId);
   }
 
+  // Record that the caller finished a video in this cohort room (per-member
+  // progress). No-ops for non-cohort rooms / non-members.
+  @Post('by-room/:roomId/video-complete')
+  markVideoWatched(
+    @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
+    @Body('videoId') videoId: string,
+  ) {
+    return this.cohorts.markVideoWatched(roomId, this.uid(req), videoId);
+  }
+
   @Post(':id/sessions')
   createSession(
     @Param('id') id: string,

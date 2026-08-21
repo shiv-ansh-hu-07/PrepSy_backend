@@ -814,9 +814,11 @@ export class CohortsService {
           include: { user: { select: { id: true, name: true } } },
           orderBy: { joinedAt: 'asc' },
         },
+        playlist: { select: { _count: { select: { videos: true } } } },
       },
     });
     if (!cohort) throw new NotFoundException('Cohort not found');
+    const totalVideos = cohort.playlist?._count.videos ?? 0;
 
     const sessions = await this.prisma.studySession.findMany({
       where: { cohortId },
@@ -891,6 +893,7 @@ export class CohortsService {
         streak,
         behind,
         onTrack: behind === 0,
+        videosWatched: this.getWatchedVideos(m.progress).length,
         avgCheckpointScore: sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
       };
     });
@@ -901,10 +904,52 @@ export class CohortsService {
 
     return {
       totalDays,
+      totalVideos,
       elapsed: elapsed.length,
       me: rows.find((r) => r.userId === userId) ?? null,
       leaderboard,
     };
+  }
+
+  // ── Video progress (per-member) ─────────────────────────────────────────────
+
+  private getWatchedVideos(progress: unknown): string[] {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const w = (progress as Record<string, unknown>).watchedVideos;
+      if (Array.isArray(w)) return w.filter((x): x is string => typeof x === 'string');
+    }
+    return [];
+  }
+
+  // Mark a video the member actually finished (live session OR self-paced
+  // catch-up). Per-member only — never touches the shared schedule, so a synced
+  // room stays in sync. No-ops if the room isn't a cohort or the user isn't a member.
+  async markVideoWatched(roomId: string, userId: string, videoId: string) {
+    if (!videoId) return { ok: false };
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true },
+    });
+    if (!cohort) return { ok: false };
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId: cohort.id, userId } },
+      select: { progress: true },
+    });
+    if (!member) return { ok: false };
+
+    const watched = new Set(this.getWatchedVideos(member.progress));
+    if (watched.has(videoId)) return { ok: true, videosWatched: watched.size };
+    watched.add(videoId);
+
+    const base =
+      member.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId: cohort.id, userId } },
+      data: { progress: { ...base, watchedVideos: [...watched] } },
+    });
+    return { ok: true, videosWatched: watched.size };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
