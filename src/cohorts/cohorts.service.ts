@@ -12,6 +12,7 @@ import { Cron } from '@nestjs/schedule';
 import { EmailService } from '../email/email.service';
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+const CHECKPOINT_PASS = 0.6; // fraction correct to count a checkpoint as passed
 
 export interface CreateCohortInput {
   playlistId: string;
@@ -797,6 +798,113 @@ export class CohortsService {
       where: { cohortId, userId },
       orderBy: { completedAt: 'desc' },
     });
+  }
+
+  // ── Progress / leaderboard ──────────────────────────────────────────────────
+
+  // Per-member progress through the shared plan. A day counts as "completed" for
+  // a member if they passed its checkpoint quiz, attended the room that day, or
+  // personally marked it caught up. Also computes a current streak (consecutive
+  // completed days back from the latest elapsed one) and on-track status.
+  async getProgress(cohortId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: {
+          include: { user: { select: { id: true, name: true } } },
+          orderBy: { joinedAt: 'asc' },
+        },
+      },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+
+    const sessions = await this.prisma.studySession.findMany({
+      where: { cohortId },
+      orderBy: { orderIndex: 'asc' },
+      select: { id: true, scheduledAt: true, roomId: true },
+    });
+
+    const now = new Date();
+    const elapsed = sessions.filter((s) => s.scheduledAt <= now);
+    const totalDays = sessions.length;
+
+    const roomIds = [
+      ...new Set(sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
+    ];
+    const [attendance, attempts] = await Promise.all([
+      roomIds.length
+        ? this.prisma.roomAttendance.findMany({
+            where: { roomId: { in: roomIds } },
+            select: { roomId: true, userId: true, joinedAt: true },
+          })
+        : Promise.resolve(
+            [] as { roomId: string; userId: string; joinedAt: Date }[],
+          ),
+      this.prisma.quizAttempt.findMany({
+        where: { cohortId, studySessionId: { not: null } },
+        select: { userId: true, studySessionId: true, score: true, questions: true },
+      }),
+    ]);
+
+    // Passed checkpoints per (user, session), and each user's avg checkpoint ratio.
+    const passed = new Set<string>();
+    const scoreByUser = new Map<string, { sum: number; n: number }>();
+    for (const a of attempts) {
+      const qCount = Array.isArray(a.questions) ? (a.questions as unknown[]).length : 5;
+      const ratio = qCount > 0 ? a.score / qCount : 0;
+      if (ratio >= CHECKPOINT_PASS && a.studySessionId) {
+        passed.add(`${a.userId}::${a.studySessionId}`);
+      }
+      const cur = scoreByUser.get(a.userId) || { sum: 0, n: 0 };
+      cur.sum += ratio;
+      cur.n += 1;
+      scoreByUser.set(a.userId, cur);
+    }
+
+    const rows = cohort.members.map((m) => {
+      const caughtUp = this.getCaughtUpMap(m.progress);
+      const flags: boolean[] = elapsed.map((s) => {
+        const didPass = passed.has(`${m.userId}::${s.id}`);
+        let attended = false;
+        if (s.roomId) {
+          const { start, end } = this.dayBounds(s.scheduledAt);
+          attended = attendance.some(
+            (a) => a.roomId === s.roomId && a.userId === m.userId && a.joinedAt >= start && a.joinedAt <= end,
+          );
+        }
+        return didPass || attended || caughtUp[s.id] === true;
+      });
+
+      const completed = flags.filter(Boolean).length;
+      let streak = 0;
+      for (let i = flags.length - 1; i >= 0 && flags[i]; i--) streak++;
+
+      const sc = scoreByUser.get(m.userId);
+      const behind = Math.max(0, elapsed.length - completed);
+      return {
+        userId: m.userId,
+        name: m.user?.name || 'Member',
+        completed,
+        totalDays,
+        elapsed: elapsed.length,
+        progressPct: totalDays ? Math.round((completed / totalDays) * 100) : 0,
+        streak,
+        behind,
+        onTrack: behind === 0,
+        avgCheckpointScore: sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
+      };
+    });
+
+    const leaderboard = [...rows].sort(
+      (a, b) => b.completed - a.completed || (b.avgCheckpointScore ?? -1) - (a.avgCheckpointScore ?? -1),
+    );
+
+    return {
+      totalDays,
+      elapsed: elapsed.length,
+      me: rows.find((r) => r.userId === userId) ?? null,
+      leaderboard,
+    };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

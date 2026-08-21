@@ -112,6 +112,11 @@ export class CohortsController {
     return this.cohorts.getSessions(id, this.uid(req));
   }
 
+  @Get(':id/progress')
+  getProgress(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getProgress(id, this.uid(req));
+  }
+
   // Current-day playback for a cohort room (drives the in-room player).
   @Get('by-room/:roomId/current-session')
   getRoomCurrentSession(@Param('roomId') roomId: string) {
