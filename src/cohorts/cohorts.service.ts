@@ -508,9 +508,11 @@ export class CohortsService {
 
   // ── Discussions ───────────────────────────────────────────────────────────
 
-  async getDiscussions(cohortId: string) {
+  // studySessionId scopes the thread list: a specific id returns that checkpoint's
+  // threads; omitted (null) returns the general cohort board, keeping them separate.
+  async getDiscussions(cohortId: string, studySessionId?: string) {
     return this.prisma.discussionPost.findMany({
-      where: { cohortId, parentId: null },
+      where: { cohortId, parentId: null, studySessionId: studySessionId ?? null },
       include: {
         author: { select: { id: true, name: true } },
         replies: {
@@ -522,10 +524,22 @@ export class CohortsService {
     });
   }
 
-  async postDiscussion(cohortId: string, userId: string, content: string, parentId?: string) {
+  async postDiscussion(
+    cohortId: string,
+    userId: string,
+    content: string,
+    parentId?: string,
+    studySessionId?: string,
+  ) {
     await this.assertMember(cohortId, userId);
     return this.prisma.discussionPost.create({
-      data: { cohortId, authorId: userId, content, parentId: parentId ?? null },
+      data: {
+        cohortId,
+        authorId: userId,
+        content,
+        parentId: parentId ?? null,
+        studySessionId: studySessionId ?? null,
+      },
       include: { author: { select: { id: true, name: true } } },
     });
   }
@@ -706,7 +720,7 @@ export class CohortsService {
 
   // ── Quizzes ───────────────────────────────────────────────────────────────
 
-  async generateQuiz(cohortId: string, userId: string, numQuestions = 5) {
+  async generateQuiz(cohortId: string, userId: string, numQuestions = 5, sessionId?: string) {
     await this.assertMember(cohortId, userId);
 
     const cohort = await this.prisma.cohort.findUnique({
@@ -717,12 +731,30 @@ export class CohortsService {
       throw new BadRequestException('No AI plan generated for this cohort yet');
     }
 
-    const curriculum = cohort.playlist.plan.curriculum as Array<{ title: string }>;
-    const topics = curriculum.map((t) => t.title);
+    let topics: string[];
+    let quizTitle = cohort.playlist.title;
+
+    if (sessionId) {
+      // Checkpoint quiz — scope to just this day's topic (+ its video titles).
+      const session = await this.prisma.studySession.findFirst({
+        where: { id: sessionId, cohortId },
+        select: { topic: true, description: true },
+      });
+      if (!session) throw new NotFoundException('Session not found');
+      const videoTitles = (session.description ?? '')
+        .split(' • ')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      topics = [session.topic, ...videoTitles].filter(Boolean);
+      quizTitle = `${cohort.playlist.title} — ${session.topic}`;
+    } else {
+      const curriculum = cohort.playlist.plan.curriculum as Array<{ title: string }>;
+      topics = curriculum.map((t) => t.title);
+    }
 
     try {
       const { data } = await axios.post(`${AI_URL}/quiz`, {
-        playlistTitle: cohort.playlist.title,
+        playlistTitle: quizTitle,
         topics,
         numQuestions,
       }, { timeout: 60_000 });
@@ -733,7 +765,13 @@ export class CohortsService {
     }
   }
 
-  async submitAttempt(cohortId: string, userId: string, questions: unknown[], answers: unknown[]) {
+  async submitAttempt(
+    cohortId: string,
+    userId: string,
+    questions: unknown[],
+    answers: unknown[],
+    studySessionId?: string,
+  ) {
     await this.assertMember(cohortId, userId);
 
     // Simple scoring: count answers that match question.answer
@@ -743,7 +781,14 @@ export class CohortsService {
     qs.forEach((q, i) => { if (ans[i] === q.answer) score++; });
 
     return this.prisma.quizAttempt.create({
-      data: { cohortId, userId, questions: questions as object, answers: answers as object, score },
+      data: {
+        cohortId,
+        userId,
+        studySessionId: studySessionId ?? null,
+        questions: questions as object,
+        answers: answers as object,
+        score,
+      },
     });
   }
 

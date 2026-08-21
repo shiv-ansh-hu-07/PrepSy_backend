@@ -5,6 +5,7 @@ import {
   Patch,
   Delete,
   Param,
+  Query,
   Body,
   Req,
   UseGuards,
@@ -84,9 +85,13 @@ export class CohortsController {
 
   // ── Discussions ───────────────────────────────────────────────────────────
 
+  // ?sessionId=... scopes to a checkpoint thread; omitted = general cohort board.
   @Get(':id/discussions')
-  getDiscussions(@Param('id') id: string) {
-    return this.cohorts.getDiscussions(id);
+  getDiscussions(
+    @Param('id') id: string,
+    @Query('sessionId') sessionId?: string,
+  ) {
+    return this.cohorts.getDiscussions(id, sessionId);
   }
 
   @Post(':id/discussions')
@@ -95,8 +100,9 @@ export class CohortsController {
     @Req() req: RequestWithUser,
     @Body('content') content: string,
     @Body('parentId') parentId?: string,
+    @Body('studySessionId') studySessionId?: string,
   ) {
-    return this.cohorts.postDiscussion(id, this.uid(req), content, parentId);
+    return this.cohorts.postDiscussion(id, this.uid(req), content, parentId, studySessionId);
   }
 
   // ── Study Sessions ────────────────────────────────────────────────────────
@@ -140,8 +146,9 @@ export class CohortsController {
     @Param('id') id: string,
     @Req() req: RequestWithUser,
     @Body('numQuestions') numQuestions?: number,
+    @Body('sessionId') sessionId?: string,
   ) {
-    return this.cohorts.generateQuiz(id, this.uid(req), numQuestions);
+    return this.cohorts.generateQuiz(id, this.uid(req), numQuestions, sessionId);
   }
 
   @Post(':id/quiz/attempt')
@@ -150,8 +157,9 @@ export class CohortsController {
     @Req() req: RequestWithUser,
     @Body('questions') questions: unknown[],
     @Body('answers') answers: string[],
+    @Body('studySessionId') studySessionId?: string,
   ) {
-    return this.cohorts.submitAttempt(id, this.uid(req), questions, answers);
+    return this.cohorts.submitAttempt(id, this.uid(req), questions, answers, studySessionId);
   }
 
   @Get(':id/quiz/attempts')

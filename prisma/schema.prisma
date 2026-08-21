@@ -358,41 +358,49 @@ model StudySession {
   endSec      Int?
   part        String?
 
-  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  quizAttempts QuizAttempt[]
+  discussions  DiscussionPost[]
 
   @@index([cohortId])
   @@index([status, scheduledAt])
 }
 
 model DiscussionPost {
-  id        String   @id @default(cuid())
-  cohortId  String
-  authorId  String
-  content   String
-  parentId  String?
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  cohortId       String
+  authorId       String
+  content        String
+  parentId       String?
+  studySessionId String? // set when the thread is scoped to a checkpoint/day
+  createdAt      DateTime @default(now())
 
-  cohort  Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
-  author  User             @relation("UserDiscussions", fields: [authorId], references: [id])
-  parent  DiscussionPost?  @relation("Replies", fields: [parentId], references: [id])
-  replies DiscussionPost[] @relation("Replies")
+  cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  author       User             @relation("UserDiscussions", fields: [authorId], references: [id])
+  parent       DiscussionPost?  @relation("Replies", fields: [parentId], references: [id])
+  replies      DiscussionPost[] @relation("Replies")
+  studySession StudySession?    @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
 
   @@index([cohortId, createdAt])
+  @@index([studySessionId])
 }
 
 model QuizAttempt {
-  id          String   @id @default(cuid())
-  cohortId    String
-  userId      String
-  questions   Json
-  answers     Json
-  score       Int
-  completedAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  cohortId       String
+  userId         String
+  studySessionId String? // set when the attempt is a day/unit checkpoint
+  questions      Json
+  answers        Json
+  score          Int
+  completedAt    DateTime @default(now())
 
-  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
-  user   User   @relation("UserQuizAttempts", fields: [userId], references: [id])
+  cohort       Cohort        @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+  user         User          @relation("UserQuizAttempts", fields: [userId], references: [id])
+  studySession StudySession? @relation(fields: [studySessionId], references: [id], onDelete: SetNull)
 
   @@index([cohortId, userId])
+  @@index([studySessionId])
 }
 
 model CommunityPost {
