@@ -387,7 +387,7 @@ export class StatsService {
   }
 
   private getAttendanceMinutes(
-    attendance: AnalyticsAttendanceRecord,
+    attendance: { joinedAt: Date; leftAt: Date | null },
     now: Date,
     timeZone: string,
   ) {
@@ -972,26 +972,27 @@ export class StatsService {
 
     // Rank by RoomAttendance minutes (same source as "Total Focus Time") so ALL
     // studying counts — YouTube co-learning watch parties and camera-off rooms
-    // included — not just camera-monitored FocusSessions. RoomAttendance has no
-    // duration column, so sum (leftAt − joinedAt) over completed rows, matching
-    // getAttendanceMinutes().
+    // included — not just camera-monitored FocusSessions. Include in-progress
+    // (open) rows too, so time shows while someone is still in the room / before
+    // their leave lands. getAttendanceMinutes gives (leftAt − joinedAt) for
+    // completed rows, (now − joinedAt) for rows still open TODAY, and 0 for stale
+    // opens from earlier days (so a forgotten session can't inflate forever).
     const attendanceRows = await this.prisma.roomAttendance.findMany({
       where: {
-        leftAt: { not: null },
         ...(gte ? { joinedAt: { gte } } : {}),
         ...(userFilter ? { userId: { in: userFilter } } : {}),
       },
       select: { userId: true, joinedAt: true, leftAt: true },
     });
 
+    const nowTs = new Date();
+    const tz = this.normalizeTimeZone(this.attendanceTimeZone);
     const minutesById = new Map<string, number>();
     for (const a of attendanceRows) {
-      if (!a.leftAt) continue;
-      const mins = Math.max(
-        0,
-        Math.round((a.leftAt.getTime() - a.joinedAt.getTime()) / 60000),
-      );
-      minutesById.set(a.userId, (minutesById.get(a.userId) ?? 0) + mins);
+      const mins = this.getAttendanceMinutes(a, nowTs, tz);
+      if (mins > 0) {
+        minutesById.set(a.userId, (minutesById.get(a.userId) ?? 0) + mins);
+      }
     }
 
     // Friends board: always list me + every accepted friend, even with 0

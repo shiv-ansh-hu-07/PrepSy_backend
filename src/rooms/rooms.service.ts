@@ -849,22 +849,22 @@ export class RoomsService {
     }
 
     const now = new Date();
-    const { start, end } = this.getAttendanceWindow(now);
+    const { start, end } = this.getAttendanceWindow(now); // today's IST window (for the leave-summary total)
+    // Close the latest still-open attendance for this room+user, regardless of
+    // which day it started — a session that crosses midnight (IST) must still be
+    // closable, or its row stays open forever and never counts.
     const currentAttendance = await this.prisma.roomAttendance.findFirst({
       where: {
         roomId,
         userId,
-        joinedAt: {
-          gte: start,
-          lt: end,
-        },
+        leftAt: null,
       },
       orderBy: {
         joinedAt: 'desc',
       },
     });
 
-    if (currentAttendance && !currentAttendance.leftAt) {
+    if (currentAttendance) {
       await this.prisma.roomAttendance.update({
         where: { id: currentAttendance.id },
         data: { leftAt: now },
