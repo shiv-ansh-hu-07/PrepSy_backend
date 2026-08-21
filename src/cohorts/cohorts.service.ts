@@ -571,19 +571,32 @@ export class CohortsService {
         })
       : [];
 
-    // Map each day's video titles (stored in `description`, joined by " • ")
-    // back to real playlist videos so the UI can offer clickable catch-up links.
+    // Resolve each day's videos. Prefer the stored videoIds (the source of
+    // truth); fall back to the legacy title strings in `description` for older
+    // sessions created before videoIds were populated.
+    const byId = new Map(
+      (cohort?.playlist?.videos ?? []).map((v) => [v.ytVideoId, v]),
+    );
     const byTitle = new Map(
       (cohort?.playlist?.videos ?? []).map((v) => [v.title.trim(), v]),
     );
     const caughtUp = this.getCaughtUpMap(member?.progress);
 
     return sessions.map((s) => {
-      const videos = (s.description ?? '')
-        .split(' • ')
-        .map((t) => byTitle.get(t.trim()))
-        .filter((v): v is NonNullable<typeof v> => Boolean(v))
-        .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title, thumbnailUrl: v.thumbnailUrl }));
+      const fromIds = (s.videoIds ?? [])
+        .map((id) => byId.get(id))
+        .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      const resolved = fromIds.length
+        ? fromIds
+        : (s.description ?? '')
+            .split(' • ')
+            .map((t) => byTitle.get(t.trim()))
+            .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      const videos = resolved.map((v) => ({
+        ytVideoId: v.ytVideoId,
+        title: v.title,
+        thumbnailUrl: v.thumbnailUrl,
+      }));
       const caughtUpByMe = caughtUp[s.id] === true;
 
       if (!s.roomId) {
