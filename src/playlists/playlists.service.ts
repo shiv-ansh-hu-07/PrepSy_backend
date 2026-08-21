@@ -138,8 +138,7 @@ export class PlaylistsService {
       }, { timeout: 120_000 });
       aiResult = data;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'AI service unavailable';
-      throw new InternalServerErrorException(`AI analysis failed: ${msg}`);
+      throw new InternalServerErrorException(`AI analysis failed: ${this.aiErrorMessage(err)}`);
     }
 
     // The AI's estimatedHours is a guess (it never sees durations) and can be
@@ -297,9 +296,19 @@ export class PlaylistsService {
 
       return { ...data, longVideos, dailyBudgetMin: budgetMin, sliced: Boolean(dto.sliceLongVideos) };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'AI service unavailable';
-      throw new InternalServerErrorException(`Schedule generation failed: ${msg}`);
+      throw new InternalServerErrorException(`Schedule generation failed: ${this.aiErrorMessage(err)}`);
     }
+  }
+
+  // Surface the AI service's real error. FastAPI returns it as { detail: "..." },
+  // so pull that out instead of the generic "Request failed with status code 500".
+  private aiErrorMessage(err: unknown): string {
+    if (axios.isAxiosError(err)) {
+      const detail = (err.response?.data as { detail?: unknown })?.detail;
+      if (typeof detail === 'string' && detail.trim()) return detail;
+      return err.message;
+    }
+    return err instanceof Error ? err.message : 'AI service unavailable';
   }
 
   private formatResponse(playlist: any) {
