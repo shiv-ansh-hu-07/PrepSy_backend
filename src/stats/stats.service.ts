@@ -386,6 +386,10 @@ export class StatsService {
       : `${hours}h ${remainingMinutes}m`;
   }
 
+  // A single session can't legitimately run longer than this; it caps runaway
+  // attendance rows so they can't post impossible hours to one day.
+  private static readonly SESSION_CAP_MIN = 600; // 10h
+
   private getAttendanceMinutes(
     attendance: { joinedAt: Date; leftAt: Date | null },
     now: Date,
@@ -404,10 +408,19 @@ export class StatsService {
     }
 
     const endAt = attendance.leftAt || now;
-    return Math.max(
+    const raw = Math.max(
       0,
       Math.round((endAt.getTime() - attendance.joinedAt.getTime()) / 60000),
     );
+
+    // Cap the session length. A row can span far more than a real sitting when
+    // the leave handler is skipped (crash / closed tab), when a session crosses
+    // midnight, or when a stale row is finally closed on a much later leave —
+    // all of which otherwise dump impossible hours onto the join date. Applied
+    // on read, so already-inflated historical rows are corrected too, no
+    // migration needed. Left uncapped by room duration on purpose: people often
+    // study past a room's planned Pomodoro length, and that time is real.
+    return Math.min(raw, StatsService.SESSION_CAP_MIN);
   }
 
   private getMinutesByDate(
