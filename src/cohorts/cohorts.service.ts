@@ -290,12 +290,27 @@ export class CohortsService {
       where: { status: 'SCHEDULED', scheduledAt: { gte: start, lte: end } },
       include: {
         cohort: {
-          include: { members: { include: { user: { select: { email: true } } } } },
+          include: {
+            members: {
+              include: { user: { select: { id: true, name: true, email: true } } },
+            },
+          },
         },
       },
     });
 
-    const frontendUrl = process.env.FRONTEND_URL || '';
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+
+    // One batched analytics pass for everyone we're about to email.
+    const memberIds = Array.from(
+      new Set(
+        sessions.flatMap((s) =>
+          s.cohort.members.map((m) => m.userId).filter(Boolean),
+        ),
+      ),
+    );
+    const statsById = await this.computeReminderStats(memberIds);
+
     for (const session of sessions) {
       const roomId = session.roomId || session.cohort.roomId;
       if (!roomId) continue;
@@ -309,16 +324,133 @@ export class CohortsService {
         .catch(() => undefined);
 
       for (const member of session.cohort.members) {
-        if (member.user?.email) {
-          await this.emailService.sendCohortSessionEmail(
-            member.user.email,
-            session.cohort.name,
-            session.topic,
-            joinUrl,
-          );
-        }
+        if (!member.user?.email) continue;
+        const st = statsById.get(member.userId) ?? {
+          streakDays: 0,
+          weekMinutes: 0,
+          weekSessions: 0,
+          goalMinutes: 0,
+        };
+        await this.emailService.sendSessionReminderEmail(member.user.email, {
+          name: member.user.name,
+          roomName: session.cohort.name,
+          topic: session.topic,
+          joinUrl,
+          streakDays: st.streakDays,
+          weekLabel: this.formatMins(st.weekMinutes),
+          sessionsThisWeek: st.weekSessions,
+          goalLabel:
+            st.goalMinutes > 0 ? `${this.formatMins(st.goalMinutes)}/day` : null,
+        });
       }
     }
+  }
+
+  private formatMins(mins: number): string {
+    if (mins < 60) return `${mins}m`;
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+
+  private istDayKey(d: Date): string {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+  }
+
+  private shiftDayKey(key: string, days: number): string {
+    const d = new Date(key + 'T12:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Streak + this-week study stats for a batch of users, for reminder emails.
+  // One attendance query + one profile query, computed in memory.
+  private async computeReminderStats(userIds: string[]) {
+    const stats = new Map<
+      string,
+      {
+        streakDays: number;
+        weekMinutes: number;
+        weekSessions: number;
+        goalMinutes: number;
+      }
+    >();
+    if (userIds.length === 0) return stats;
+
+    const since = new Date(Date.now() - 45 * 86400000);
+    const weekAgoMs = Date.now() - 7 * 86400000;
+    const todayKey = this.istDayKey(new Date());
+
+    const [attendance, profiles] = await Promise.all([
+      this.prisma.roomAttendance.findMany({
+        where: {
+          userId: { in: userIds },
+          leftAt: { not: null },
+          joinedAt: { gte: since },
+        },
+        select: { userId: true, joinedAt: true, leftAt: true },
+      }),
+      this.prisma.userProfile.findMany({
+        where: { userId: { in: userIds } },
+        select: { userId: true, dailyStudyGoalMinutes: true },
+      }),
+    ]);
+
+    const goalById = new Map(
+      profiles.map((p) => [p.userId, p.dailyStudyGoalMinutes ?? 0]),
+    );
+
+    const byUser = new Map<
+      string,
+      { days: Set<string>; weekMinutes: number; weekDays: Set<string> }
+    >();
+    for (const a of attendance) {
+      if (!byUser.has(a.userId)) {
+        byUser.set(a.userId, {
+          days: new Set(),
+          weekMinutes: 0,
+          weekDays: new Set(),
+        });
+      }
+      const row = byUser.get(a.userId)!;
+      const key = this.istDayKey(a.joinedAt);
+      row.days.add(key);
+      if (a.joinedAt.getTime() >= weekAgoMs) {
+        // Same 10h/session cap as analytics, so a stray long row can't skew it.
+        const mins = Math.min(
+          600,
+          Math.max(
+            0,
+            Math.round((a.leftAt!.getTime() - a.joinedAt.getTime()) / 60000),
+          ),
+        );
+        row.weekMinutes += mins;
+        row.weekDays.add(key);
+      }
+    }
+
+    for (const userId of userIds) {
+      const row = byUser.get(userId);
+      let streak = 0;
+      if (row) {
+        // Consecutive IST study days ending today (or yesterday if not today).
+        let expected = row.days.has(todayKey)
+          ? todayKey
+          : this.shiftDayKey(todayKey, -1);
+        while (row.days.has(expected)) {
+          streak++;
+          expected = this.shiftDayKey(expected, -1);
+        }
+      }
+      stats.set(userId, {
+        streakDays: streak,
+        weekMinutes: row?.weekMinutes ?? 0,
+        weekSessions: row?.weekDays.size ?? 0,
+        goalMinutes: goalById.get(userId) ?? 0,
+      });
+    }
+    return stats;
   }
 
   // Just after midnight IST: resolve yesterday's sessions. If anyone attended

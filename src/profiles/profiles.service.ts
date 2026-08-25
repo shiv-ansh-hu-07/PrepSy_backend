@@ -119,6 +119,37 @@ export class ProfilesService {
     return { avatarUrl };
   }
 
+  // Lightweight toggle for email reminders — its own path so it doesn't have to
+  // satisfy the full-profile required-field validation.
+  async setEmailNotifications(userId: string, enabled: boolean) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    try {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        create: { userId, emailNotifications: enabled },
+        update: { emailNotifications: enabled },
+      });
+    } catch (error) {
+      if (this.isProfileStorageUnavailable(error)) {
+        throw new BadRequestException(
+          'Profile storage is still being prepared. Please run the latest database migration and try again.',
+        );
+      }
+      throw new BadRequestException(
+        'Could not update your notification setting. Please try again.',
+      );
+    }
+
+    return { emailNotifications: enabled };
+  }
+
   async updateMyProfile(userId: string, body: unknown) {
     const input = this.parseInput(body);
 
@@ -351,6 +382,7 @@ export class ProfilesService {
       githubUrl: string | null;
       isDiscoverable: boolean;
       aiMonitorConsent: boolean;
+      emailNotifications: boolean;
       updatedAt: Date;
     };
   }) {
@@ -393,6 +425,7 @@ export class ProfilesService {
       githubUrl: profile?.githubUrl || '',
       isDiscoverable: profile?.isDiscoverable ?? true,
       aiMonitorConsent: profile?.aiMonitorConsent ?? false,
+      emailNotifications: profile?.emailNotifications ?? true,
       updatedAt: profile?.updatedAt?.toISOString() || null,
     };
 

@@ -121,6 +121,7 @@ model UserProfile {
   githubUrl    String?
   isDiscoverable Boolean @default(true)
   aiMonitorConsent Boolean @default(false)
+  emailNotifications Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

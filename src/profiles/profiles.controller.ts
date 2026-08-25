@@ -65,6 +65,18 @@ export class ProfilesController {
     return this.profilesService.updateMyProfile(this.getUserId(req), body);
   }
 
+  // Toggle email reminders on/off (used by the Profile switch + email unsubscribe).
+  @Put('me/notifications')
+  setEmailNotifications(
+    @Req() req: RequestWithUser,
+    @Body() body: { enabled?: unknown },
+  ) {
+    return this.profilesService.setEmailNotifications(
+      this.getUserId(req),
+      body?.enabled === true,
+    );
+  }
+
   @Post('avatar')
   @UseInterceptors(
     FileInterceptor('file', {
