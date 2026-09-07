@@ -77,6 +77,12 @@ export class ProfilesController {
     );
   }
 
+  // Mark the first-login product tour as seen (account-scoped).
+  @Put('me/tour-seen')
+  setTourSeen(@Req() req: RequestWithUser) {
+    return this.profilesService.setTourSeen(this.getUserId(req));
+  }
+
   @Post('avatar')
   @UseInterceptors(
     FileInterceptor('file', {

@@ -150,6 +150,37 @@ export class ProfilesService {
     return { emailNotifications: enabled };
   }
 
+  // Mark the first-login product tour as seen. Account-scoped so it follows the
+  // user across devices; its own path so it skips full-profile validation.
+  async setTourSeen(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    try {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        create: { userId, hasSeenTour: true },
+        update: { hasSeenTour: true },
+      });
+    } catch (error) {
+      if (this.isProfileStorageUnavailable(error)) {
+        throw new BadRequestException(
+          'Profile storage is still being prepared. Please run the latest database migration and try again.',
+        );
+      }
+      throw new BadRequestException(
+        'Could not save your tour progress. Please try again.',
+      );
+    }
+
+    return { hasSeenTour: true };
+  }
+
   async updateMyProfile(userId: string, body: unknown) {
     const input = this.parseInput(body);
 

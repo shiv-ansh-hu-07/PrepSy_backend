@@ -22,6 +22,7 @@ type AuthUserRecord = Pick<
   streakDisabled: boolean;
   profile?: {
     avatarUrl: string | null;
+    hasSeenTour?: boolean;
   } | null;
 };
 
@@ -96,7 +97,7 @@ export class AuthService {
     multiple?: boolean;
   }): Promise<AuthUserRecord | null> {
     const { where, multiple } = options;
-    const include = { profile: { select: { avatarUrl: true } } } as const;
+    const include = { profile: { select: { avatarUrl: true, hasSeenTour: true } } } as const;
 
     try {
       return multiple
@@ -275,6 +276,7 @@ private async createOauthUser(
         name: user.name,
         attendanceStreak: this.getEffectiveStreak(user),
         avatarUrl: user.profile?.avatarUrl || null,
+        hasSeenTour: user.profile?.hasSeenTour ?? false,
       },
     };
   }
@@ -301,6 +303,7 @@ private async createOauthUser(
     name: existingUser.name,
     attendanceStreak: this.getEffectiveStreak(existingUser),
     avatarUrl: existingUser.profile?.avatarUrl || null,
+    hasSeenTour: existingUser.profile?.hasSeenTour ?? false,
   };
 }
 
@@ -333,6 +336,7 @@ private async createOauthUser(
         name: user.name,
         attendanceStreak: this.getEffectiveStreak(user),
         avatarUrl: user.profile?.avatarUrl || null,
+        hasSeenTour: user.profile?.hasSeenTour ?? false,
       },
     };
   }
