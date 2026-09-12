@@ -107,6 +107,13 @@ export class RoomsController {
     return this.roomsService.leaveRoom(roomId, this.getUserId(req));
   }
 
+  // Permanently exit a room — removes membership so no further reminders/emails
+  // are sent (room + cohort). Distinct from /leave, which only ends the session.
+  @Post(':roomId/exit')
+  exitRoom(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.roomsService.exitRoom(roomId, this.getUserId(req));
+  }
+
   // Playback memory — public so watch-party guests resume too (like the P2P sync).
   @Public()
   @Get(':roomId/video-state')

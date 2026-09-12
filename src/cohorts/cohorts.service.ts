@@ -315,6 +315,21 @@ export class CohortsService {
     for (const session of sessions) {
       const roomId = session.roomId || session.cohort.roomId;
       if (!roomId) continue;
+
+      // Don't email a room that no longer exists. If the owner deleted the
+      // cohort's room, its StudySessions can linger (no FK to Room) — without
+      // this guard the cron would keep sending "today's session" reminders for
+      // a dead room. Skip and cancel the orphaned session so it stops recurring.
+      const roomExists = await this.prisma.room.findUnique({
+        where: { roomId },
+        select: { roomId: true },
+      });
+      if (!roomExists) {
+        await this.prisma.studySession
+          .update({ where: { id: session.id }, data: { status: 'CANCELLED' } })
+          .catch(() => undefined);
+        continue;
+      }
       const joinUrl = `${frontendUrl}/room/${roomId}`;
 
       await this.prisma.room

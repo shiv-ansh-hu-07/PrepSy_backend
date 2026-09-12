@@ -1035,6 +1035,13 @@ export class RoomsService {
       this.prisma.pomodoro.deleteMany({
         where: { roomId },
       }),
+      // If this room backs a YouTube cohort, delete the cohort too (its members,
+      // study sessions, discussions and quiz attempts cascade). StudySession has
+      // no FK to Room, so without this its sessions would linger and the daily
+      // cohort cron would keep emailing reminders for a room that's gone.
+      this.prisma.cohort.deleteMany({
+        where: { roomId },
+      }),
       // RoomAttendance is intentionally NOT deleted — it holds session-based analytics
       // that must survive room deletion (it no longer has a foreign key to Room).
       this.prisma.room.delete({
@@ -1043,6 +1050,48 @@ export class RoomsService {
     ]);
 
     return { success: true };
+  }
+
+  // Permanently exit a room: remove the caller's membership so NO further
+  // communication reaches them — the 15-min room reminders (member-based) and,
+  // for a cohort room, the daily cohort reminders (cohort-member-based) both
+  // stop. Also closes any open attendance. Tolerant of an already-deleted room
+  // so users can clear out lingering comms from rooms that are already gone.
+  async exitRoom(roomId: string, userId: string) {
+    const open = await this.prisma.roomAttendance.findFirst({
+      where: { roomId, userId, leftAt: null },
+      orderBy: { joinedAt: 'desc' },
+    });
+    if (open) {
+      await this.prisma.roomAttendance.update({
+        where: { id: open.id },
+        data: { leftAt: new Date() },
+      });
+    }
+
+    // Drop room membership → stops the room reminder emails.
+    await this.prisma.roomMember.deleteMany({ where: { roomId, userId } });
+
+    // If this room backs a cohort, drop cohort membership too → stops the daily
+    // cohort reminders. The creator owns the cohort (can't silently leave their
+    // own) — they should delete it instead, so we don't remove them here.
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true, createdById: true },
+    });
+    let leftCohort = false;
+    if (cohort && cohort.createdById !== userId) {
+      const res = await this.prisma.cohortMember.deleteMany({
+        where: { cohortId: cohort.id, userId },
+      });
+      leftCohort = res.count > 0;
+    }
+
+    return {
+      success: true,
+      leftCohort,
+      isCohortCreator: Boolean(cohort && cohort.createdById === userId),
+    };
   }
 
   async getRoomDetails(roomId: string): Promise<RoomWithRelations> {
