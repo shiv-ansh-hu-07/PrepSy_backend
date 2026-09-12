@@ -375,6 +375,10 @@ model StudySession {
   endSec      Int?
   part        String?
 
+  // Cached AI-generated opening question for this day's checkpoint discussion
+  // (JSON: { question, followups }). Generated lazily on first open.
+  discussionPrompt String?
+
   cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   quizAttempts QuizAttempt[]
   discussions  DiscussionPost[]

@@ -677,6 +677,65 @@ export class CohortsService {
     });
   }
 
+  // A grounded AI opening question to seed a day's checkpoint discussion, so an
+  // empty thread isn't a dead end. Generated once via the AI service and cached
+  // on the StudySession; returns { question, followups }. Falls back to an empty
+  // question (the client shows static starters) if the AI is unavailable.
+  async getDiscussionPrompt(cohortId: string, userId: string, sessionId: string) {
+    await this.assertMember(cohortId, userId);
+    const session = await this.prisma.studySession.findFirst({
+      where: { id: sessionId, cohortId },
+      select: { id: true, topic: true, description: true, discussionPrompt: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+
+    if (session.discussionPrompt) {
+      try {
+        return JSON.parse(session.discussionPrompt) as {
+          question: string;
+          followups: string[];
+        };
+      } catch {
+        // fall through and regenerate a malformed cache
+      }
+    }
+
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      select: { playlist: { select: { title: true } } },
+    });
+    const videoTitles = (session.description ?? '')
+      .split(' • ')
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    try {
+      const { data } = await axios.post(
+        `${AI_URL}/discussion-prompt`,
+        {
+          topic: session.topic,
+          videoTitles,
+          playlistTitle: cohort?.playlist?.title ?? '',
+        },
+        { timeout: 30_000 },
+      );
+      const result = {
+        question: typeof data?.question === 'string' ? data.question : '',
+        followups: Array.isArray(data?.followups)
+          ? (data.followups as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 3)
+          : [],
+      };
+      if (result.question) {
+        await this.prisma.studySession
+          .update({ where: { id: session.id }, data: { discussionPrompt: JSON.stringify(result) } })
+          .catch(() => undefined);
+      }
+      return result;
+    } catch {
+      return { question: '', followups: [] };
+    }
+  }
+
   async postDiscussion(
     cohortId: string,
     userId: string,

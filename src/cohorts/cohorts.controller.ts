@@ -101,6 +101,16 @@ export class CohortsController {
     return this.cohorts.getDiscussions(id, sessionId);
   }
 
+  // AI opening question that seeds a day's checkpoint discussion thread.
+  @Get(':id/sessions/:sessionId/discussion-prompt')
+  getDiscussionPrompt(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.cohorts.getDiscussionPrompt(id, this.uid(req), sessionId);
+  }
+
   @Post(':id/discussions')
   postDiscussion(
     @Param('id') id: string,
