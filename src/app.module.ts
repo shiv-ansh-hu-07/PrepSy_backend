@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
@@ -36,8 +38,12 @@ import { HealthController } from './health/health.controller';
     FriendsModule,
     AnalyticsModule,
     ScheduleModule.forRoot(),
+    // Global rate limiting. The default is deliberately generous so normal
+    // browsing (and a whole cohort behind one campus NAT) is never throttled;
+    // auth routes tighten this with their own @Throttle for brute-force defence.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 600 }]),
   ],
   controllers: [AppController, LivekitController, HealthController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

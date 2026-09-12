@@ -7,6 +7,7 @@ import {
   UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt.guard';
 import { OAuth2Client } from 'google-auth-library';
@@ -31,6 +32,9 @@ export class AuthController {
   // REGISTER (EMAIL/PASSWORD)
   // =========================
 
+  // Tighter than the global limit: password auth is the brute-force surface.
+  // 15/min per IP is plenty for real users (even several on one campus NAT).
+  @Throttle({ default: { limit: 15, ttl: 60_000 } })
   @Post('register')
   register(
     @Body('email') email: string,
@@ -44,6 +48,7 @@ export class AuthController {
   // LOGIN (EMAIL/PASSWORD)
   // =========================
 
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('login')
   login(
     @Body('email') email: string,
@@ -56,6 +61,7 @@ export class AuthController {
   // =========================
   // GOOGLE OAUTH (ID TOKEN)
   // =========================
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Post('oauth/google')
   async googleAuth(
     @Body('idToken') idToken: string,
