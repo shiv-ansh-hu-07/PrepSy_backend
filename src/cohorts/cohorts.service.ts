@@ -6,6 +6,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import { Cron } from '@nestjs/schedule';
@@ -1120,7 +1121,144 @@ export class CohortsService {
       where: { cohortId_userId: { cohortId: cohort.id, userId } },
       data: { progress: { ...base, watchedVideos: [...watched] } },
     });
+
+    // Whole-cohort adaptive scheduling: if this watch put the group ahead of
+    // plan, recompute the remaining days. Best-effort — never blocks the write.
+    void this.recomputeScheduleFromProgress(cohort.id).catch(() => undefined);
+
     return { ok: true, videosWatched: watched.size };
+  }
+
+  // ── Adaptive scheduling (whole-cohort) ──────────────────────────────────────
+
+  // When the cohort watches ahead (finishes videos that belong to FUTURE days),
+  // recompute the remaining schedule: drop every video the cohort has already
+  // watched, re-pack the rest into consecutive future days by the daily budget,
+  // and delete the trailing days that are no longer needed — so the whole cohort
+  // finishes sooner and nobody re-watches. Past + today's sessions are never
+  // touched (they're history / the live session in progress), so the synced
+  // spine stays intact. No-ops when the cohort isn't actually ahead.
+  async recomputeScheduleFromProgress(cohortId: string) {
+    const DEFAULT_DAILY_SEC = 2 * 3600;
+    const DEFAULT_VIDEO_SEC = 12 * 60;
+
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: { select: { progress: true } },
+        playlist: {
+          include: {
+            videos: {
+              orderBy: { position: 'asc' },
+              select: { ytVideoId: true, title: true, durationSec: true },
+            },
+          },
+        },
+      },
+    });
+    const videos = cohort?.playlist?.videos ?? [];
+    if (!cohort || !videos.length) return { ok: false, changed: false };
+
+    // Cohort-wide watched union.
+    const watched = new Set<string>();
+    for (const m of cohort.members) {
+      for (const v of this.getWatchedVideos(m.progress)) watched.add(v);
+    }
+
+    const sessions = await this.prisma.studySession.findMany({
+      where: { cohortId },
+      orderBy: { scheduledAt: 'asc' },
+    });
+    if (!sessions.length) return { ok: false, changed: false };
+
+    const { end: endToday } = this.dayBounds(new Date());
+    const futureSessions = sessions.filter((s) => s.scheduledAt > endToday);
+    if (!futureSessions.length) return { ok: true, changed: false };
+
+    // Only act when the group is genuinely AHEAD: a video planned for a future
+    // day has already been watched. Otherwise leave the schedule alone.
+    const aheadCount = futureSessions
+      .flatMap((s) => s.videoIds ?? [])
+      .filter((vid) => watched.has(vid)).length;
+    if (aheadCount === 0) return { ok: true, changed: false };
+
+    // Videos already covered by past/today sessions (by schedule) or watched.
+    const covered = new Set<string>(watched);
+    for (const s of sessions) {
+      if (s.scheduledAt <= endToday) {
+        for (const vid of s.videoIds ?? []) covered.add(vid);
+      }
+    }
+    const remaining = videos.filter((v) => !covered.has(v.ytVideoId));
+
+    const durSec = (v: { durationSec: number | null }) =>
+      v.durationSec && v.durationSec > 0 ? v.durationSec : DEFAULT_VIDEO_SEC;
+    const dailySec =
+      (futureSessions[0].studyHours
+        ? futureSessions[0].studyHours * 3600
+        : DEFAULT_DAILY_SEC) || DEFAULT_DAILY_SEC;
+
+    // Pack the remaining videos into consecutive days by duration (>=1/day).
+    const days: { videos: typeof remaining }[] = [];
+    let cur: typeof remaining = [];
+    let curSec = 0;
+    for (const v of remaining) {
+      const d = durSec(v);
+      if (cur.length && curSec + d > dailySec) {
+        days.push({ videos: cur });
+        cur = [];
+        curSec = 0;
+      }
+      cur.push(v);
+      curSec += d;
+    }
+    if (cur.length) days.push({ videos: cur });
+
+    // Rewrite future days in date order; delete the days no longer needed.
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    futureSessions.forEach((s, i) => {
+      const day = days[i];
+      if (day) {
+        const vids = day.videos;
+        const totalSec = vids.reduce((a, v) => a + durSec(v), 0);
+        ops.push(
+          this.prisma.studySession.update({
+            where: { id: s.id },
+            data: {
+              videoIds: vids.map((v) => v.ytVideoId),
+              topic: `Day ${s.orderIndex + 1}: ${vids[0].title}${vids.length > 1 ? ` +${vids.length - 1} more` : ''}`,
+              description: vids.map((v) => v.title).join(' • '),
+              studyHours: Math.round((totalSec / 3600) * 10) / 10,
+              status: 'SCHEDULED',
+            },
+          }),
+        );
+      } else {
+        // No videos left for this slot — the cohort finished early.
+        ops.push(this.prisma.studySession.delete({ where: { id: s.id } }));
+      }
+    });
+    await this.prisma.$transaction(ops);
+
+    return {
+      ok: true,
+      changed: true,
+      remainingDays: days.length,
+      removedDays: Math.max(0, futureSessions.length - days.length),
+    };
+  }
+
+  // Creator-triggered recompute (a manual "recalculate" button), same engine.
+  async recomputeScheduleManual(cohortId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      select: { createdById: true },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (cohort.createdById !== userId) {
+      throw new ForbiddenException('Only the creator can recompute the schedule');
+    }
+    return this.recomputeScheduleFromProgress(cohortId);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

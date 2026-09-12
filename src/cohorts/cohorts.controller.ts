@@ -83,6 +83,13 @@ export class CohortsController {
     return this.cohorts.deleteCohort(id, this.uid(req));
   }
 
+  // Recompute the remaining schedule from watched progress (creator only).
+  // Also runs automatically when the cohort watches ahead.
+  @Post(':id/recompute-schedule')
+  recomputeSchedule(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.recomputeScheduleManual(id, this.uid(req));
+  }
+
   // ── Discussions ───────────────────────────────────────────────────────────
 
   // ?sessionId=... scopes to a checkpoint thread; omitted = general cohort board.
