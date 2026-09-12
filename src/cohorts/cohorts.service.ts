@@ -14,6 +14,7 @@ import { EmailService } from '../email/email.service';
 
 const AI_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const CHECKPOINT_PASS = 0.6; // fraction correct to count a checkpoint as passed
+const COHORT_MAX_SIZE = 6; // a cohort is a small study crew, not a broadcast
 
 export interface CreateCohortInput {
   playlistId: string;
@@ -63,7 +64,10 @@ export class CohortsService {
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
   async createCohort(userId: string, input: CreateCohortInput) {
-    const { playlistId, name, maxSize = 10, startMode, dailyTime, startDate, sessions } = input;
+    const { playlistId, name, maxSize, startMode, dailyTime, startDate, sessions } = input;
+    // Small by design: a cohort is a study crew, not a broadcast. Cap at 6 so
+    // synced watching + checkpoint discussion actually work (deck's number).
+    const cappedMax = Math.min(Math.max(2, maxSize ?? COHORT_MAX_SIZE), COHORT_MAX_SIZE);
 
     const playlist = await this.prisma.playlist.findUnique({ where: { id: playlistId } });
     if (!playlist) throw new NotFoundException('Playlist not found');
@@ -81,7 +85,7 @@ export class CohortsService {
         playlistId,
         name: name.trim(),
         createdById: userId,
-        maxSize,
+        maxSize: cappedMax,
         startMode: startMode ?? null,
         dailyTime: dailyTime ?? null,
         startDate: startMode ? firstStart : null,
@@ -744,6 +748,7 @@ export class CohortsService {
       (cohort?.playlist?.videos ?? []).map((v) => [v.title.trim(), v]),
     );
     const caughtUp = this.getCaughtUpMap(member?.progress);
+    const watchedSet = new Set(this.getWatchedVideos(member?.progress));
 
     return sessions.map((s) => {
       const fromIds = (s.videoIds ?? [])
@@ -761,9 +766,12 @@ export class CohortsService {
         thumbnailUrl: v.thumbnailUrl,
       }));
       const caughtUpByMe = caughtUp[s.id] === true;
+      // Did I actually watch this day's material (all its videos)? Real
+      // completion evidence, unlike merely being in the room.
+      const watchedByMe = videos.length > 0 && videos.every((v) => watchedSet.has(v.ytVideoId));
 
       if (!s.roomId) {
-        return { ...s, attendedByMe: false, attendeeCount: 0, caughtUpByMe, videos };
+        return { ...s, attendedByMe: false, attendeeCount: 0, caughtUpByMe, watchedByMe, videos };
       }
       const { start, end } = this.dayBounds(s.scheduledAt);
       const dayRows = attendance.filter(
@@ -771,7 +779,7 @@ export class CohortsService {
       );
       const attendeeCount = new Set(dayRows.map((a) => a.userId)).size;
       const attendedByMe = dayRows.some((a) => a.userId === userId);
-      return { ...s, attendedByMe, attendeeCount, caughtUpByMe, videos };
+      return { ...s, attendedByMe, attendeeCount, caughtUpByMe, watchedByMe, videos };
     });
   }
 
@@ -1010,7 +1018,7 @@ export class CohortsService {
     const sessions = await this.prisma.studySession.findMany({
       where: { cohortId },
       orderBy: { orderIndex: 'asc' },
-      select: { id: true, scheduledAt: true, roomId: true },
+      select: { id: true, scheduledAt: true, roomId: true, videoIds: true },
     });
 
     const now = new Date();
@@ -1052,8 +1060,17 @@ export class CohortsService {
 
     const rows = cohort.members.map((m) => {
       const caughtUp = this.getCaughtUpMap(m.progress);
+      const watchedSet = new Set(this.getWatchedVideos(m.progress));
+      let checkpointBackedDays = 0;
+      let attendedDays = 0;
+      // A day counts COMPLETED only with real evidence of learning: the member
+      // passed its checkpoint quiz, watched all its videos, or self-reported
+      // catch-up. Merely being in the room (attendance) is participation, NOT
+      // completion — tracked separately so the retention story stays honest.
       const flags: boolean[] = elapsed.map((s) => {
         const didPass = passed.has(`${m.userId}::${s.id}`);
+        const vids = s.videoIds ?? [];
+        const watchedAll = vids.length > 0 && vids.every((v) => watchedSet.has(v));
         let attended = false;
         if (s.roomId) {
           const { start, end } = this.dayBounds(s.scheduledAt);
@@ -1061,7 +1078,9 @@ export class CohortsService {
             (a) => a.roomId === s.roomId && a.userId === m.userId && a.joinedAt >= start && a.joinedAt <= end,
           );
         }
-        return didPass || attended || caughtUp[s.id] === true;
+        if (attended) attendedDays++;
+        if (didPass) checkpointBackedDays++;
+        return didPass || watchedAll || caughtUp[s.id] === true;
       });
 
       const completed = flags.filter(Boolean).length;
@@ -1080,8 +1099,12 @@ export class CohortsService {
         streak,
         behind,
         onTrack: behind === 0,
-        videosWatched: this.getWatchedVideos(m.progress).length,
+        videosWatched: watchedSet.size,
         avgCheckpointScore: sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
+        // Honesty metrics: how much of "completed" is checkpoint-proven vs just
+        // attended (in the room but no checkpoint/watch evidence).
+        checkpointBackedDays,
+        attendedDays,
       };
     });
 
@@ -1115,7 +1138,7 @@ export class CohortsService {
     if (!videoId) return { ok: false };
     const cohort = await this.prisma.cohort.findFirst({
       where: { roomId },
-      select: { id: true },
+      select: { id: true, createdById: true },
     });
     if (!cohort) return { ok: false };
     const member = await this.prisma.cohortMember.findUnique({
@@ -1137,9 +1160,14 @@ export class CohortsService {
       data: { progress: { ...base, watchedVideos: [...watched] } },
     });
 
-    // Whole-cohort adaptive scheduling: if this watch put the group ahead of
-    // plan, recompute the remaining days. Best-effort — never blocks the write.
-    void this.recomputeScheduleFromProgress(cohort.id).catch(() => undefined);
+    // Whole-cohort adaptive scheduling: only the cohort CREATOR (the de-facto
+    // host) racing ahead moves the shared schedule — otherwise any one eager
+    // member would silently rewrite everyone's plan and break the "we're all on
+    // the same day" discipline. Others still race ahead in their own progress.
+    // Best-effort — never blocks the write.
+    if (userId === cohort.createdById) {
+      void this.recomputeScheduleFromProgress(cohort.id).catch(() => undefined);
+    }
 
     return { ok: true, videosWatched: watched.size };
   }

@@ -324,7 +324,7 @@ model Cohort {
   playlistId  String
   name        String
   createdById String
-  maxSize     Int      @default(10)
+  maxSize     Int      @default(6)
   createdAt   DateTime @default(now())
 
   // YouTube cohort: shared recurring study room + daily scheduling
