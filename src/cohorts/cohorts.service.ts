@@ -904,6 +904,9 @@ export class CohortsService {
       videos: cohort.playlist?.videos ?? [],
       watchedVideoIds: member ? this.getWatchedVideos(member.progress) : [],
       currentVideoId: current?.videoIds?.[0] ?? null,
+      // The cohort creator is the default host (drives playback in the live
+      // room); the frontend uses this to gate controls + the handoff protocol.
+      hostUserId: cohort.createdById,
     };
   }
 
