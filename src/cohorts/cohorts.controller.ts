@@ -123,6 +123,12 @@ export class CohortsController {
     return this.cohorts.getRoomCurrentSession(roomId);
   }
 
+  // Full playlist + the caller's watched set, for the in-room Playlist browser.
+  @Get('by-room/:roomId/playlist')
+  getRoomPlaylist(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getRoomPlaylist(roomId, this.uid(req));
+  }
+
   // Record that the caller finished a video in this cohort room (per-member
   // progress). No-ops for non-cohort rooms / non-members.
   @Post('by-room/:roomId/video-complete')

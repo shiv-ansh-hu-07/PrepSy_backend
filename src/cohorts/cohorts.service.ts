@@ -844,6 +844,45 @@ export class CohortsService {
     };
   }
 
+  // Full playlist for a cohort room's in-room browser: every video (ordered)
+  // plus the caller's watched set, so the Playlist panel can render the whole
+  // list with watched marks and let anyone jump to any video. Returns null for
+  // non-cohort rooms. `currentVideoId` is the day's suggested starting video.
+  async getRoomPlaylist(roomId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      include: {
+        playlist: {
+          include: {
+            videos: {
+              select: {
+                ytVideoId: true,
+                title: true,
+                thumbnailUrl: true,
+                position: true,
+                durationSec: true,
+              },
+              orderBy: { position: 'asc' },
+            },
+          },
+        },
+      },
+    });
+    if (!cohort) return null;
+
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId: cohort.id, userId } },
+      select: { progress: true },
+    });
+    const current = await this.getRoomCurrentSession(roomId);
+
+    return {
+      videos: cohort.playlist?.videos ?? [],
+      watchedVideoIds: member ? this.getWatchedVideos(member.progress) : [],
+      currentVideoId: current?.videoIds?.[0] ?? null,
+    };
+  }
+
   async createSession(cohortId: string, userId: string, topic: string, scheduledAt: Date) {
     await this.assertMember(cohortId, userId);
     return this.prisma.studySession.create({
