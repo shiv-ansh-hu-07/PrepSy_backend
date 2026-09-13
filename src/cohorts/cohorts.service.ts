@@ -23,6 +23,8 @@ export interface CreateCohortInput {
   startMode?: 'NOW' | 'SCHEDULED';
   dailyTime?: string;
   startDate?: string;
+  // When re-forming, carry the crew from a finished cohort into this new one.
+  reformFromCohortId?: string;
   sessions?: {
     topic: string;
     description?: string;
@@ -64,7 +66,7 @@ export class CohortsService {
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
   async createCohort(userId: string, input: CreateCohortInput) {
-    const { playlistId, name, maxSize, startMode, dailyTime, startDate, sessions } = input;
+    const { playlistId, name, maxSize, startMode, dailyTime, startDate, sessions, reformFromCohortId } = input;
     // Small by design: a cohort is a study crew, not a broadcast. Cap at 6 so
     // synced watching + checkpoint discussion actually work (deck's number).
     const cappedMax = Math.min(Math.max(2, maxSize ?? COHORT_MAX_SIZE), COHORT_MAX_SIZE);
@@ -93,6 +95,28 @@ export class CohortsService {
       },
     });
 
+    // Re-form: carry the crew from a finished cohort. Only the caller's own
+    // cohorts, and only up to the size cap. Members re-commit by continuing.
+    let reformCrew: string[] = [];
+    if (reformFromCohortId) {
+      const source = await this.prisma.cohort.findFirst({
+        where: { id: reformFromCohortId, members: { some: { userId } } },
+        include: { members: { select: { userId: true } } },
+      });
+      if (source) {
+        reformCrew = source.members
+          .map((m) => m.userId)
+          .filter((uid) => uid !== userId)
+          .slice(0, Math.max(0, cappedMax - 1));
+        if (reformCrew.length) {
+          await this.prisma.cohortMember.createMany({
+            data: reformCrew.map((uid) => ({ cohortId: cohort.id, userId: uid, progress: {} })),
+            skipDuplicates: true,
+          });
+        }
+      }
+    }
+
     // Scheduled cohorts get one shared recurring room + a daily session per plan-day.
     if (startMode === 'NOW' || startMode === 'SCHEDULED') {
       const roomId = randomUUID();
@@ -113,6 +137,12 @@ export class CohortsService {
         },
       });
       await this.prisma.roomMember.create({ data: { roomId, userId } });
+      if (reformCrew.length) {
+        await this.prisma.roomMember.createMany({
+          data: reformCrew.map((uid) => ({ roomId, userId: uid })),
+          skipDuplicates: true,
+        });
+      }
       await this.prisma.cohort.update({ where: { id: cohort.id }, data: { roomId } });
 
       const dayList = Array.isArray(sessions) ? sessions : [];
@@ -1345,6 +1375,10 @@ export class CohortsService {
       memberCount: p.memberCount,
       todayCompletedCount: p.todayCompletedCount,
       hasTodaySession: Boolean(p.todaySession),
+      // The cohort has reached its finish line once every planned day has
+      // elapsed — drives the graduation moment + "re-form for the next course".
+      finished: p.totalDays > 0 && p.elapsedDays >= p.totalDays,
+      playlistTitle: p.playlistTitle,
       me: me ? strip(me) : null,
       leaderboard,
     };
