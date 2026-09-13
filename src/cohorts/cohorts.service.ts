@@ -541,29 +541,48 @@ export class CohortsService {
       take: 60,
     });
 
-    const scored = cohorts.map((c) => {
-      const hay = new Set(
-        `${c.name} ${c.playlist?.title ?? ''} ${c.playlist?.channelTitle ?? ''}`
-          .toLowerCase()
-          .split(/[^a-z0-9]+/)
-          .filter(Boolean),
-      );
-      const matched = [...tokens].filter((t) => hay.has(t)).length;
-      const members = c._count.members;
-      return {
-        id: c.id,
-        name: c.name,
-        playlistTitle: c.playlist?.title ?? null,
-        thumbnailUrl: c.playlist?.thumbnailUrl ?? null,
-        memberCount: members,
-        matched,
-        score: matched * 5 + Math.min(members, 5),
-      };
-    });
+    const now = Date.now();
+    const DAY = 86400000;
+    const scored = cohorts
+      .map((c) => {
+        const hay = new Set(
+          `${c.name} ${c.playlist?.title ?? ''} ${c.playlist?.channelTitle ?? ''}`
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter(Boolean),
+        );
+        const matched = [...tokens].filter((t) => hay.has(t)).length;
+        const members = c._count.members;
+        const spotsLeft = Math.max(0, c.maxSize - members);
+        const startMs = c.startDate ? c.startDate.getTime() : null;
+        // "forming" = hasn't started yet → the ideal cold-start entry: you join
+        // before day 1 and begin with a full, live crew.
+        const forming = startMs != null && startMs > now;
+        const daysToStart = forming ? (startMs! - now) / DAY : null;
+        // Rank: interest match > about-to-start > has social proof. Soonest
+        // upcoming starts float up (join before it kicks off).
+        const soonBoost = daysToStart != null ? Math.max(0, 6 - daysToStart) : 0;
+        const score =
+          matched * 6 + (forming ? 4 : 0) + soonBoost + Math.min(members, 4);
+        return {
+          id: c.id,
+          name: c.name,
+          playlistTitle: c.playlist?.title ?? null,
+          thumbnailUrl: c.playlist?.thumbnailUrl ?? null,
+          memberCount: members,
+          maxSize: c.maxSize,
+          spotsLeft,
+          startDate: c.startDate ? c.startDate.toISOString() : null,
+          dailyTime: c.dailyTime ?? null,
+          status: forming ? 'forming' : 'active',
+          matched,
+          score,
+        };
+      })
+      // Only show cohorts you can actually join.
+      .filter((c) => c.spotsLeft > 0);
 
-    const withMatch = scored.filter((c) => c.matched > 0).sort((a, b) => b.score - a.score);
-    const fallback = [...scored].sort((a, b) => b.memberCount - a.memberCount);
-    const ranked = withMatch.length ? withMatch : fallback;
+    const ranked = [...scored].sort((a, b) => b.score - a.score);
 
     return ranked.slice(0, 8).map((c) => ({
       id: c.id,
@@ -571,7 +590,17 @@ export class CohortsService {
       playlistTitle: c.playlistTitle,
       thumbnailUrl: c.thumbnailUrl,
       memberCount: c.memberCount,
-      reason: c.matched > 0 ? 'Matches your interests' : 'Popular cohort',
+      maxSize: c.maxSize,
+      spotsLeft: c.spotsLeft,
+      startDate: c.startDate,
+      dailyTime: c.dailyTime,
+      status: c.status,
+      reason:
+        c.matched > 0
+          ? 'Matches your goals'
+          : c.status === 'forming'
+            ? 'Starting soon'
+            : 'Popular cohort',
     }));
   }
 
