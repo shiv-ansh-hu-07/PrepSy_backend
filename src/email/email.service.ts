@@ -187,6 +187,92 @@ export class EmailService {
     });
   }
 
+  // ── "You're the missing one" cohort nudge ────────────────────────────────
+  // The personal, social, loss-framed evening reminder: your crew, your shared
+  // streak on the line, who already showed up, and exactly what skipping costs.
+  async sendCohortStreakEmail(
+    to: string,
+    data: {
+      name?: string | null;
+      cohortName: string;
+      topic: string;
+      joinUrl: string;
+      personalStreak: number;
+      cohortStreak: number;
+      completedNames: string[];
+      memberCount: number;
+      behind: number;
+    },
+  ) {
+    if (!(await this.notificationsAllowed(to))) return;
+
+    const name = data.name?.trim() || 'there';
+    const done = data.completedNames.filter(Boolean);
+
+    // "Aman, Riya and 2 others" — social proof of who already studied today.
+    const nameList = (names: string[]) => {
+      if (names.length === 0) return '';
+      if (names.length === 1) return names[0];
+      if (names.length === 2) return `${names[0]} and ${names[1]}`;
+      return `${names[0]}, ${names[1]} and ${names.length - 2} other${names.length - 2 === 1 ? '' : 's'}`;
+    };
+
+    const socialLine =
+      done.length > 0
+        ? `<strong>${nameList(done)}</strong> already studied today. You're one of the few who hasn't yet.`
+        : `Nobody in your crew has studied yet today — be the one who gets everyone going.`;
+
+    const streakLine =
+      data.cohortStreak > 0
+        ? `Your crew is on a <strong>${data.cohortStreak}-day streak</strong> 🔥 — if enough of you skip today, <strong>it resets to 0 at midnight</strong>.`
+        : `Show up tonight and help your crew start a streak.`;
+
+    const personalLine =
+      data.personalStreak > 0
+        ? `You'd also lose your own <strong>${data.personalStreak}-day streak</strong>.`
+        : '';
+
+    const behindLine =
+      data.behind > 0
+        ? `You're currently <strong>${data.behind} day${data.behind === 1 ? '' : 's'} behind</strong> — tonight's the chance to close the gap.`
+        : `You're right on track — don't give that up now.`;
+
+    const subject =
+      done.length > 0
+        ? `You're the missing one in ${data.cohortName} today`
+        : data.cohortStreak > 0
+          ? `Your crew's ${data.cohortStreak}-day streak ends tonight`
+          : `Your crew is studying — ${data.cohortName}`;
+
+    await this.sendEmail({
+      to,
+      subject,
+      html: `
+        <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 6px">Your crew is missing you, ${name} 👀</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${data.cohortName}</strong> · today: ${data.topic}</p>
+
+          <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:18px 20px;margin:16px 0">
+            <p style="color:#4a5a85;font-size:15px;line-height:1.6;margin:0 0 10px">${socialLine}</p>
+            <p style="color:#4a5a85;font-size:14px;line-height:1.6;margin:0">${behindLine}</p>
+          </div>
+
+          <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 18px;margin:0 0 22px">
+            <p style="color:#c2410c;font-size:14px;line-height:1.6;margin:0">
+              ${streakLine} ${personalLine}
+            </p>
+          </div>
+
+          <a href="${data.joinUrl}" style="display:inline-block;padding:13px 30px;background:#7c3aed;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+            Join your crew now →
+          </a>
+          <p style="color:#9aa4c7;font-size:12px;margin:16px 0 0">Even 20 minutes tonight keeps the streak — and your crew — alive.</p>
+          ${this.unsubscribeFooter()}
+        </div>
+      `,
+    });
+  }
+
   async sendCohortSessionEmail(
     to: string,
     cohortName: string,

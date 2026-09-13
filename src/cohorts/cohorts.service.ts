@@ -1059,28 +1059,33 @@ export class CohortsService {
 
   // ── Progress / leaderboard ──────────────────────────────────────────────────
 
-  // Per-member progress through the shared plan. A day counts as "completed" for
-  // a member if they passed its checkpoint quiz, attended the room that day, or
-  // personally marked it caught up. Also computes a current streak (consecutive
-  // completed days back from the latest elapsed one) and on-track status.
-  async getProgress(cohortId: string, userId: string) {
+  // A cohort "holds" a day (keeps its shared streak) when at least half the crew
+  // completed it — enough to feel like a group effort without being impossible.
+  private cohortStreakQuorum(memberCount: number) {
+    return Math.max(1, Math.ceil(memberCount / 2));
+  }
+
+  // Core per-member + cohort-wide progress, shared by the API and the email
+  // nudges so both use the exact same "completed" definition. Rows include email
+  // (for the cron) — the public API strips it.
+  private async buildCohortProgress(cohortId: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
       include: {
         members: {
-          include: { user: { select: { id: true, name: true } } },
+          include: { user: { select: { id: true, name: true, email: true } } },
           orderBy: { joinedAt: 'asc' },
         },
-        playlist: { select: { _count: { select: { videos: true } } } },
+        playlist: { select: { title: true, _count: { select: { videos: true } } } },
       },
     });
-    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (!cohort) return null;
     const totalVideos = cohort.playlist?._count.videos ?? 0;
 
     const sessions = await this.prisma.studySession.findMany({
       where: { cohortId },
       orderBy: { orderIndex: 'asc' },
-      select: { id: true, scheduledAt: true, roomId: true, videoIds: true },
+      select: { id: true, topic: true, scheduledAt: true, roomId: true, videoIds: true },
     });
 
     const now = new Date();
@@ -1105,7 +1110,6 @@ export class CohortsService {
       }),
     ]);
 
-    // Passed checkpoints per (user, session), and each user's avg checkpoint ratio.
     const passed = new Set<string>();
     const scoreByUser = new Map<string, { sum: number; n: number }>();
     for (const a of attempts) {
@@ -1120,16 +1124,21 @@ export class CohortsService {
       scoreByUser.set(a.userId, cur);
     }
 
+    // Which elapsed day (if any) is today's session (IST day).
+    const { start: tStart, end: tEnd } = this.dayBounds(now);
+    const todayIdx = elapsed.findIndex(
+      (s) => s.scheduledAt >= tStart && s.scheduledAt <= tEnd,
+    );
+    const perDayCompleted = new Array<number>(elapsed.length).fill(0);
+
     const rows = cohort.members.map((m) => {
       const caughtUp = this.getCaughtUpMap(m.progress);
       const watchedSet = new Set(this.getWatchedVideos(m.progress));
       let checkpointBackedDays = 0;
       let attendedDays = 0;
-      // A day counts COMPLETED only with real evidence of learning: the member
-      // passed its checkpoint quiz, watched all its videos, or self-reported
-      // catch-up. Merely being in the room (attendance) is participation, NOT
-      // completion — tracked separately so the retention story stays honest.
-      const flags: boolean[] = elapsed.map((s) => {
+      // COMPLETED = real evidence of learning (passed checkpoint / watched all /
+      // caught up). Attendance is participation only, tracked separately.
+      const flags: boolean[] = elapsed.map((s, i) => {
         const didPass = passed.has(`${m.userId}::${s.id}`);
         const vids = s.videoIds ?? [];
         const watchedAll = vids.length > 0 && vids.every((v) => watchedSet.has(v));
@@ -1142,7 +1151,9 @@ export class CohortsService {
         }
         if (attended) attendedDays++;
         if (didPass) checkpointBackedDays++;
-        return didPass || watchedAll || caughtUp[s.id] === true;
+        const done = didPass || watchedAll || caughtUp[s.id] === true;
+        if (done) perDayCompleted[i]++;
+        return done;
       });
 
       const completed = flags.filter(Boolean).length;
@@ -1154,6 +1165,7 @@ export class CohortsService {
       return {
         userId: m.userId,
         name: m.user?.name || 'Member',
+        email: m.user?.email || null,
         completed,
         totalDays,
         elapsed: elapsed.length,
@@ -1163,24 +1175,103 @@ export class CohortsService {
         onTrack: behind === 0,
         videosWatched: watchedSet.size,
         avgCheckpointScore: sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
-        // Honesty metrics: how much of "completed" is checkpoint-proven vs just
-        // attended (in the room but no checkpoint/watch evidence).
         checkpointBackedDays,
         attendedDays,
+        completedToday: todayIdx >= 0 ? flags[todayIdx] : false,
       };
     });
 
-    const leaderboard = [...rows].sort(
-      (a, b) => b.completed - a.completed || (b.avgCheckpointScore ?? -1) - (a.avgCheckpointScore ?? -1),
-    );
+    const quorum = this.cohortStreakQuorum(cohort.members.length);
+    let cohortStreak = 0;
+    for (let i = perDayCompleted.length - 1; i >= 0 && perDayCompleted[i] >= quorum; i--) {
+      cohortStreak++;
+    }
 
     return {
+      cohortName: cohort.name,
+      playlistTitle: cohort.playlist?.title ?? '',
+      roomId: cohort.roomId,
+      memberCount: cohort.members.length,
       totalDays,
       totalVideos,
-      elapsed: elapsed.length,
-      me: rows.find((r) => r.userId === userId) ?? null,
+      elapsedDays: elapsed.length,
+      rows,
+      cohortStreak,
+      todaySession: todayIdx >= 0 ? elapsed[todayIdx] : null,
+      todayCompletedCount: todayIdx >= 0 ? perDayCompleted[todayIdx] : 0,
+    };
+  }
+
+  // Public progress view: per-member rows + leaderboard + the shared cohort
+  // streak and today's crew completion (drives the "you're the missing one" UI).
+  async getProgress(cohortId: string, userId: string) {
+    const p = await this.buildCohortProgress(cohortId);
+    if (!p) throw new NotFoundException('Cohort not found');
+
+    // Strip email before it leaves the API.
+    const strip = (r: (typeof p.rows)[number]) => {
+      const { email: _email, ...rest } = r;
+      return rest;
+    };
+    const leaderboard = [...p.rows]
+      .sort((a, b) => b.completed - a.completed || (b.avgCheckpointScore ?? -1) - (a.avgCheckpointScore ?? -1))
+      .map(strip);
+
+    const me = p.rows.find((r) => r.userId === userId);
+    return {
+      totalDays: p.totalDays,
+      totalVideos: p.totalVideos,
+      elapsed: p.elapsedDays,
+      cohortStreak: p.cohortStreak,
+      memberCount: p.memberCount,
+      todayCompletedCount: p.todayCompletedCount,
+      hasTodaySession: Boolean(p.todaySession),
+      me: me ? strip(me) : null,
       leaderboard,
     };
+  }
+
+  // Evening (8 PM IST) "you're the missing one" nudge: for each cohort with a
+  // session today, email the members who haven't completed it yet — but only
+  // when there are real stakes (crewmates already studied today, or a shared
+  // streak is on the line). This is the personal, social, loss-framed reminder.
+  @Cron('0 20 * * *', { timeZone: 'Asia/Kolkata' })
+  async sendCohortStreakNudges() {
+    const { start, end } = this.dayBounds(new Date());
+    const todays = await this.prisma.studySession.findMany({
+      where: { scheduledAt: { gte: start, lte: end } },
+      select: { cohortId: true },
+      distinct: ['cohortId'],
+    });
+
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+
+    for (const t of todays) {
+      const p = await this.buildCohortProgress(t.cohortId).catch(() => null);
+      if (!p || !p.todaySession || !p.roomId) continue;
+
+      // Only nudge when it stings: someone already did today, or a streak lives.
+      if (p.todayCompletedCount === 0 && p.cohortStreak === 0) continue;
+
+      const completedNames = p.rows.filter((r) => r.completedToday).map((r) => r.name);
+      const missing = p.rows.filter((r) => !r.completedToday && r.email);
+      if (missing.length === 0) continue;
+
+      const joinUrl = `${frontendUrl}/room/${p.roomId}`;
+      for (const m of missing) {
+        await this.emailService.sendCohortStreakEmail(m.email!, {
+          name: m.name,
+          cohortName: p.cohortName,
+          topic: p.todaySession.topic,
+          joinUrl,
+          personalStreak: m.streak,
+          cohortStreak: p.cohortStreak,
+          completedNames,
+          memberCount: p.memberCount,
+          behind: m.behind,
+        });
+      }
+    }
   }
 
   // ── Video progress (per-member) ─────────────────────────────────────────────
