@@ -118,6 +118,26 @@ export class CohortsController {
     return this.cohorts.getDiscussions(id, sessionId);
   }
 
+  // Per-member, per-day notes (revisitable).
+  @Get(':id/sessions/:sessionId/notes')
+  getNote(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.cohorts.getSessionNote(id, this.uid(req), sessionId);
+  }
+
+  @Post(':id/sessions/:sessionId/notes')
+  setNote(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Req() req: RequestWithUser,
+    @Body('text') text: string,
+  ) {
+    return this.cohorts.setSessionNote(id, this.uid(req), sessionId, text);
+  }
+
   // AI opening question that seeds a day's checkpoint discussion thread.
   @Get(':id/sessions/:sessionId/discussion-prompt')
   getDiscussionPrompt(

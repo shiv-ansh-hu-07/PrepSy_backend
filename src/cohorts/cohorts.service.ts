@@ -901,6 +901,60 @@ export class CohortsService {
     });
   }
 
+  // Per-member, per-day notes live in CohortMember.progress.notes (no schema
+  // change). Shape: { [studySessionId]: string }. Revisitable per day.
+  private getNotesMap(progress: unknown): Record<string, string> {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const n = (progress as Record<string, unknown>).notes;
+      if (n && typeof n === 'object' && !Array.isArray(n)) {
+        return n as Record<string, string>;
+      }
+    }
+    return {};
+  }
+
+  async getSessionNote(cohortId: string, userId: string, sessionId: string) {
+    await this.assertMember(cohortId, userId);
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    return { text: this.getNotesMap(member?.progress)[sessionId] || '' };
+  }
+
+  async setSessionNote(
+    cohortId: string,
+    userId: string,
+    sessionId: string,
+    text: string,
+  ) {
+    await this.assertMember(cohortId, userId);
+    const session = await this.prisma.studySession.findFirst({
+      where: { id: sessionId, cohortId },
+      select: { id: true },
+    });
+    if (!session) throw new NotFoundException('Session not found');
+
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const notes = this.getNotesMap(member?.progress);
+    const t = (text || '').slice(0, 20000);
+    if (t.trim()) notes[sessionId] = t;
+    else delete notes[sessionId];
+
+    const base =
+      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId, userId } },
+      data: { progress: { ...base, notes } },
+    });
+    return { ok: true };
+  }
+
   // Per-member cohort intro lives in CohortMember.progress.intro (no schema
   // change). Shape: { goal?: string, blurb?: string }.
   private getIntro(progress: unknown): { goal?: string; blurb?: string } | null {
@@ -1068,6 +1122,7 @@ export class CohortsService {
 
     return {
       id: session.id,
+      cohortId: cohort.id,
       topic: session.topic,
       videoIds: session.videoIds,
       startSec: session.startSec,
