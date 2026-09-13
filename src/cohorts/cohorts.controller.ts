@@ -64,6 +64,23 @@ export class CohortsController {
     return this.cohorts.joinCohort(id, this.uid(req));
   }
 
+  // "Meet your crew" — members with their intro/goal + prep-for.
+  @Get(':id/crew')
+  getCrew(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getCrew(id, this.uid(req));
+  }
+
+  // Set my intro (goal + short blurb) for this cohort.
+  @Post(':id/intro')
+  setIntro(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Body('goal') goal?: string,
+    @Body('blurb') blurb?: string,
+  ) {
+    return this.cohorts.setCohortIntro(id, this.uid(req), goal, blurb);
+  }
+
   @Delete(':id/leave')
   leave(@Param('id') id: string, @Req() req: RequestWithUser) {
     return this.cohorts.leaveCohort(id, this.uid(req));

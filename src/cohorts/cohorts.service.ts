@@ -842,6 +842,96 @@ export class CohortsService {
     });
   }
 
+  // Per-member cohort intro lives in CohortMember.progress.intro (no schema
+  // change). Shape: { goal?: string, blurb?: string }.
+  private getIntro(progress: unknown): { goal?: string; blurb?: string } | null {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const i = (progress as Record<string, unknown>).intro;
+      if (i && typeof i === 'object' && !Array.isArray(i)) {
+        return i as { goal?: string; blurb?: string };
+      }
+    }
+    return null;
+  }
+
+  // "Meet your crew": every member with their intro (goal + blurb) and, as a
+  // fallback, what they're prepping for from their profile — so a new joiner
+  // immediately sees who they're studying with, not anonymous rows.
+  async getCrew(cohortId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: {
+          include: { user: { select: { id: true, name: true } } },
+          orderBy: { joinedAt: 'asc' },
+        },
+      },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+
+    const ids = cohort.members.map((m) => m.userId);
+    const profiles = ids.length
+      ? await this.prisma.userProfile.findMany({
+          where: { userId: { in: ids } },
+          select: { userId: true, examTargets: true, goals: true },
+        })
+      : [];
+    const profById = new Map(profiles.map((p) => [p.userId, p]));
+
+    const members = cohort.members.map((m) => {
+      const intro = this.getIntro(m.progress);
+      const prof = profById.get(m.userId);
+      const prepFor = (prof?.examTargets?.length ? prof.examTargets : prof?.goals) ?? [];
+      return {
+        userId: m.userId,
+        name: m.user?.name || 'Member',
+        isCreator: cohort.createdById === m.userId,
+        joinedAt: m.joinedAt,
+        goal: intro?.goal || null,
+        blurb: intro?.blurb || null,
+        prepFor: prepFor.slice(0, 3),
+      };
+    });
+
+    const meProf = profById.get(userId);
+    const me = members.find((m) => m.userId === userId) || null;
+    return {
+      members,
+      isMember: Boolean(me),
+      hasIntro: Boolean(me?.goal || me?.blurb),
+      // Prefill suggestion for the intro form.
+      prepForSuggestion:
+        meProf?.examTargets?.[0] || meProf?.goals?.[0] || '',
+    };
+  }
+
+  // Set (or update) my intro for this cohort — a lightweight commitment + hello.
+  async setCohortIntro(
+    cohortId: string,
+    userId: string,
+    goal?: string,
+    blurb?: string,
+  ) {
+    await this.assertMember(cohortId, userId);
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const base =
+      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+    const intro = {
+      goal: (goal || '').trim().slice(0, 80) || null,
+      blurb: (blurb || '').trim().slice(0, 300) || null,
+    };
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId, userId } },
+      data: { progress: { ...base, intro } },
+    });
+    return { ok: true, intro };
+  }
+
   // Personal catch-up lives in the per-user CohortMember.progress JSON — no
   // schema change needed. Shape: { caughtUp: { [studySessionId]: true } }.
   private getCaughtUpMap(progress: unknown): Record<string, boolean> {
