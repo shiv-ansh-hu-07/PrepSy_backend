@@ -60,14 +60,15 @@ export class EmailService {
     to: string;
     subject: string;
     html: string;
-  }) {
+    replyTo?: string;
+  }): Promise<boolean> {
     const fromAddress = this.getFromAddress();
 
     if (!this.resend || !fromAddress) {
       this.logger.warn(
         `Skipping email to ${options.to} because RESEND_API_KEY or EMAIL_FROM is not configured.`,
       );
-      return;
+      return false;
     }
 
     try {
@@ -76,12 +77,48 @@ export class EmailService {
         to: options.to,
         subject: options.subject,
         html: options.html,
+        ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       });
+      return true;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown email error';
       this.logger.error(`Failed to send email to ${options.to}: ${message}`);
+      return false;
     }
+  }
+
+  // ── Contact form ──────────────────────────────────────────────────────────
+  // Sends a visitor's message to the founder inbox (CONTACT_EMAIL), with the
+  // sender set as reply-to so the founder can reply straight from Gmail.
+  async sendContactEmail(data: {
+    name: string;
+    email: string;
+    subject?: string;
+    message: string;
+  }): Promise<boolean> {
+    const to =
+      process.env.CONTACT_EMAIL?.trim() || 'shivanshu0503tiwari@gmail.com';
+    const esc = (s: string) =>
+      String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string);
+    const subject = data.subject?.trim() || 'New message';
+
+    return this.sendEmail({
+      to,
+      replyTo: data.email,
+      subject: `📨 Prepsy contact: ${esc(subject)}`,
+      html: `
+        <div style="font-family:Inter,Arial,sans-serif;max-width:560px;margin:0 auto;padding:28px 24px;background:#fafbff;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 14px">New contact message</h2>
+          <div style="background:#fff;border:1px solid #e8ecff;border-radius:12px;padding:16px 18px">
+            <p style="margin:0 0 8px;color:#4a5a85;font-size:14px"><strong>From:</strong> ${esc(data.name)} &lt;${esc(data.email)}&gt;</p>
+            <p style="margin:0 0 12px;color:#4a5a85;font-size:14px"><strong>Subject:</strong> ${esc(subject)}</p>
+            <p style="margin:0;color:#2f3b63;font-size:15px;line-height:1.6;white-space:pre-wrap">${esc(data.message)}</p>
+          </div>
+          <p style="color:#9aa4c7;font-size:12px;margin:14px 0 0">Reply directly to this email to respond to ${esc(data.name)}.</p>
+        </div>
+      `,
+    });
   }
 
   private formatSchedule(startTime: Date, timeZone?: string) {
