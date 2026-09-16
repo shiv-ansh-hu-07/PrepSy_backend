@@ -581,9 +581,14 @@ export class CohortsService {
     return stats;
   }
 
-  // Just after midnight IST: resolve yesterday's sessions. If anyone attended
-  // the room that day, mark it COMPLETED; otherwise POSTPONE it and shift every
-  // later scheduled session one day forward (nothing gets skipped).
+  // Just after midnight IST: resolve yesterday's sessions on real learning
+  // evidence, not attendance. A day is COMPLETED only if the cohort actually
+  // finished its videos (every one of the day's videoIds is in the cohort-wide
+  // watched set). A day that lapsed without finishing is marked POSTPONED and its
+  // content is carried forward: recomputeScheduleFromProgress re-packs every
+  // unwatched video into the upcoming days (creating extra days if needed), so
+  // nothing watched-short is silently lost. (Legacy/empty sessions with no
+  // videoIds fall back to attendance so they still resolve.)
   @Cron('5 0 * * *', { timeZone: 'Asia/Kolkata' })
   async resolveMissedCohortSessions() {
     const yesterday = this.addDays(new Date(), -1);
@@ -592,37 +597,55 @@ export class CohortsService {
     const sessions = await this.prisma.studySession.findMany({
       where: { status: 'SCHEDULED', scheduledAt: { gte: start, lte: end } },
     });
+    if (!sessions.length) return;
 
+    // Cohort-wide watched union for each cohort with a session yesterday.
+    const cohortIds = [...new Set(sessions.map((s) => s.cohortId))];
+    const members = await this.prisma.cohortMember.findMany({
+      where: { cohortId: { in: cohortIds } },
+      select: { cohortId: true, progress: true },
+    });
+    const watchedByCohort = new Map<string, Set<string>>();
+    for (const m of members) {
+      const set = watchedByCohort.get(m.cohortId) ?? new Set<string>();
+      for (const v of this.getWatchedVideos(m.progress)) set.add(v);
+      watchedByCohort.set(m.cohortId, set);
+    }
+
+    const lapsed = new Set<string>();
     for (const session of sessions) {
-      const attended = session.roomId
-        ? await this.prisma.roomAttendance.count({
-            where: { roomId: session.roomId, joinedAt: { gte: start, lte: end } },
-          })
-        : 0;
+      const vids = session.videoIds ?? [];
+      const watchedUnion = watchedByCohort.get(session.cohortId) ?? new Set<string>();
+      const finishedContent = vids.length > 0 && vids.every((v) => watchedUnion.has(v));
 
-      if (attended > 0) {
+      // Only sessions with no videos fall back to attendance (legacy/empty days).
+      let attended = 0;
+      if (!vids.length && session.roomId) {
+        attended = await this.prisma.roomAttendance.count({
+          where: { roomId: session.roomId, joinedAt: { gte: start, lte: end } },
+        });
+      }
+      const done = finishedContent || (vids.length === 0 && attended > 0);
+
+      if (done) {
         await this.prisma.studySession.update({
           where: { id: session.id },
           data: { status: 'COMPLETED' },
         });
       } else {
-        const later = await this.prisma.studySession.findMany({
-          where: {
-            cohortId: session.cohortId,
-            status: 'SCHEDULED',
-            orderIndex: { gte: session.orderIndex },
-          },
+        // Lapsed: drop this day's content and carry it forward via the re-pack.
+        await this.prisma.studySession.update({
+          where: { id: session.id },
+          data: { status: 'POSTPONED', videoIds: [] },
         });
-        for (const s of later) {
-          await this.prisma.studySession.update({
-            where: { id: s.id },
-            data: {
-              scheduledAt: this.addDays(s.scheduledAt, 1),
-              reminderSent: false, // re-arm the near-session reminder for the new day
-            },
-          });
-        }
+        lapsed.add(session.cohortId);
       }
+    }
+
+    // Re-pack each cohort that lapsed a day so the leftover videos land in the
+    // upcoming days instead of vanishing. Best-effort; never throws.
+    for (const cohortId of lapsed) {
+      await this.recomputeScheduleFromProgress(cohortId).catch(() => undefined);
     }
   }
 
@@ -941,8 +964,12 @@ export class CohortsService {
       }),
     ]);
 
+    // POSTPONED days lapsed without the cohort finishing them; their content has
+    // been carried forward into upcoming days, so they no longer show as study days.
+    const visible = sessions.filter((s) => s.status !== 'POSTPONED');
+
     const roomIds = [
-      ...new Set(sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
+      ...new Set(visible.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
     ];
     const attendance = roomIds.length
       ? await this.prisma.roomAttendance.findMany({
@@ -963,7 +990,7 @@ export class CohortsService {
     const caughtUp = this.getCaughtUpMap(member?.progress);
     const watchedSet = new Set(this.getWatchedVideos(member?.progress));
 
-    return sessions.map((s) => {
+    return visible.map((s) => {
       const fromIds = (s.videoIds ?? [])
         .map((id) => byId.get(id))
         .filter((v): v is NonNullable<typeof v> => Boolean(v));
@@ -1381,11 +1408,14 @@ export class CohortsService {
     if (!cohort) return null;
     const totalVideos = cohort.playlist?._count.videos ?? 0;
 
-    const sessions = await this.prisma.studySession.findMany({
+    const allSessions = await this.prisma.studySession.findMany({
       where: { cohortId },
       orderBy: { orderIndex: 'asc' },
-      select: { id: true, topic: true, scheduledAt: true, roomId: true, videoIds: true },
+      select: { id: true, topic: true, scheduledAt: true, roomId: true, videoIds: true, status: true },
     });
+    // POSTPONED days lapsed without completion and had their content carried
+    // forward, so they don't count toward the plan's day total or completion.
+    const sessions = allSessions.filter((s) => s.status !== 'POSTPONED');
 
     const now = new Date();
     const elapsed = sessions.filter((s) => s.scheduledAt <= now);
@@ -1628,15 +1658,21 @@ export class CohortsService {
     return { ok: true, videosWatched: watched.size };
   }
 
-  // ── Adaptive scheduling (whole-cohort) ──────────────────────────────────────
+  // ── Adaptive scheduling (whole-cohort, both directions) ─────────────────────
 
-  // When the cohort watches ahead (finishes videos that belong to FUTURE days),
-  // recompute the remaining schedule: drop every video the cohort has already
-  // watched, re-pack the rest into consecutive future days by the daily budget,
-  // and delete the trailing days that are no longer needed — so the whole cohort
-  // finishes sooner and nobody re-watches. Past + today's sessions are never
-  // touched (they're history / the live session in progress), so the synced
-  // spine stays intact. No-ops when the cohort isn't actually ahead.
+  // Rebuild the FUTURE schedule from what the cohort has actually watched, in
+  // BOTH directions:
+  //   • AHEAD  — a video that belongs to a future day is already watched → it's
+  //     dropped, the rest re-pack into fewer days, and now-empty trailing days
+  //     are deleted (the cohort finishes sooner, nobody re-watches).
+  //   • BEHIND — a video that was planned for a PAST day was never finished →
+  //     it's carried forward into the upcoming days, creating extra days if the
+  //     leftover no longer fits the remaining slots (nothing is silently lost).
+  // Past days stay as historical records and TODAY's live content stays pinned
+  // to today (never pulled forward), so the synced live spine is untouched; only
+  // future sessions are rewritten / created / deleted. Idempotent: if the desired
+  // future layout already matches, it no-ops — safe to call after any watch event
+  // or nightly resolve.
   async recomputeScheduleFromProgress(cohortId: string) {
     const DEFAULT_DAILY_SEC = 2 * 3600;
     const DEFAULT_VIDEO_SEC = 12 * 60;
@@ -1670,21 +1706,18 @@ export class CohortsService {
     });
     if (!sessions.length) return { ok: false, changed: false };
 
-    const { end: endToday } = this.dayBounds(new Date());
+    const now = new Date();
+    const { end: endToday } = this.dayBounds(now);
+    const { start: todayStart } = this.dayBounds(now);
     const futureSessions = sessions.filter((s) => s.scheduledAt > endToday);
-    if (!futureSessions.length) return { ok: true, changed: false };
 
-    // Only act when the group is genuinely AHEAD: a video planned for a future
-    // day has already been watched. Otherwise leave the schedule alone.
-    const aheadCount = futureSessions
-      .flatMap((s) => s.videoIds ?? [])
-      .filter((vid) => watched.has(vid)).length;
-    if (aheadCount === 0) return { ok: true, changed: false };
-
-    // Videos already covered by past/today sessions (by schedule) or watched.
+    // TODAY's scheduled videos are the live content — pin them to today, never
+    // pull them forward (the group is watching them now). Past days' videos are
+    // NOT auto-covered: if they weren't watched they belong in `remaining` so the
+    // behind case carries them forward.
     const covered = new Set<string>(watched);
     for (const s of sessions) {
-      if (s.scheduledAt <= endToday) {
+      if (s.scheduledAt >= todayStart && s.scheduledAt <= endToday) {
         for (const vid of s.videoIds ?? []) covered.add(vid);
       }
     }
@@ -1693,9 +1726,11 @@ export class CohortsService {
     const durSec = (v: { durationSec: number | null }) =>
       v.durationSec && v.durationSec > 0 ? v.durationSec : DEFAULT_VIDEO_SEC;
     const dailySec =
-      (futureSessions[0].studyHours
+      (futureSessions[0]?.studyHours
         ? futureSessions[0].studyHours * 3600
-        : DEFAULT_DAILY_SEC) || DEFAULT_DAILY_SEC;
+        : sessions[0]?.studyHours
+          ? sessions[0].studyHours * 3600
+          : DEFAULT_DAILY_SEC) || DEFAULT_DAILY_SEC;
 
     // Pack the remaining videos into consecutive days by duration (>=1/day).
     const days: { videos: typeof remaining }[] = [];
@@ -1713,23 +1748,49 @@ export class CohortsService {
     }
     if (cur.length) days.push({ videos: cur });
 
-    // Rewrite future days in date order; delete the days no longer needed.
+    // Change detection: if the future layout already equals the desired one,
+    // do nothing (avoids pointless writes when called on every watch event).
+    const sameIds = (a: string[], b: string[]) =>
+      a.length === b.length && a.every((x, i) => x === b[i]);
+    const desired = days.map((d) => d.videos.map((v) => v.ytVideoId));
+    const currentFuture = futureSessions.map((s) => s.videoIds ?? []);
+    if (
+      desired.length === currentFuture.length &&
+      desired.every((d, i) => sameIds(d, currentFuture[i]))
+    ) {
+      return { ok: true, changed: false };
+    }
+
+    // Anchor for any NEW days: strictly after both the last existing session and
+    // today, so created sessions never land in the past.
+    const lastAt = sessions[sessions.length - 1].scheduledAt;
+    const anchor = new Date(Math.max(lastAt.getTime(), endToday.getTime()));
+    let maxOrder = sessions.reduce((mx, s) => Math.max(mx, s.orderIndex), -1);
+
+    const dataFor = (
+      vids: typeof remaining,
+      orderIndex: number,
+    ) => {
+      const totalSec = vids.reduce((a, v) => a + durSec(v), 0);
+      return {
+        videoIds: vids.map((v) => v.ytVideoId),
+        topic: `Day ${orderIndex + 1}: ${vids[0].title}${vids.length > 1 ? ` +${vids.length - 1} more` : ''}`,
+        description: vids.map((v) => v.title).join(' • '),
+        studyHours: Math.round((totalSec / 3600) * 10) / 10,
+        status: 'SCHEDULED' as const,
+      };
+    };
+
+    // Rewrite existing future days, delete the ones no longer needed, and create
+    // extra days when the carried-forward backlog needs more room than remains.
     const ops: Prisma.PrismaPromise<unknown>[] = [];
     futureSessions.forEach((s, i) => {
       const day = days[i];
       if (day) {
-        const vids = day.videos;
-        const totalSec = vids.reduce((a, v) => a + durSec(v), 0);
         ops.push(
           this.prisma.studySession.update({
             where: { id: s.id },
-            data: {
-              videoIds: vids.map((v) => v.ytVideoId),
-              topic: `Day ${s.orderIndex + 1}: ${vids[0].title}${vids.length > 1 ? ` +${vids.length - 1} more` : ''}`,
-              description: vids.map((v) => v.title).join(' • '),
-              studyHours: Math.round((totalSec / 3600) * 10) / 10,
-              status: 'SCHEDULED',
-            },
+            data: dataFor(day.videos, s.orderIndex),
           }),
         );
       } else {
@@ -1737,6 +1798,21 @@ export class CohortsService {
         ops.push(this.prisma.studySession.delete({ where: { id: s.id } }));
       }
     });
+    for (let i = futureSessions.length; i < days.length; i++) {
+      maxOrder += 1;
+      const scheduledAt = this.addDays(anchor, i - futureSessions.length + 1);
+      ops.push(
+        this.prisma.studySession.create({
+          data: {
+            cohortId,
+            roomId: cohort.roomId,
+            orderIndex: maxOrder,
+            scheduledAt,
+            ...dataFor(days[i].videos, maxOrder),
+          },
+        }),
+      );
+    }
     await this.prisma.$transaction(ops);
 
     return {
@@ -1744,6 +1820,7 @@ export class CohortsService {
       changed: true,
       remainingDays: days.length,
       removedDays: Math.max(0, futureSessions.length - days.length),
+      addedDays: Math.max(0, days.length - futureSessions.length),
     };
   }
 
