@@ -382,6 +382,10 @@ model StudySession {
   // (JSON: { question, followups }). Generated lazily on first open.
   discussionPrompt String?
 
+  // Set once the near-session "starting soon" reminder has been emailed, so the
+  // 5-minute cron fires it exactly once (its 20-min window spans several ticks).
+  reminderSent Boolean @default(false)
+
   cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   quizAttempts QuizAttempt[]
   discussions  DiscussionPost[]

@@ -396,6 +396,85 @@ export class CohortsService {
     }
   }
 
+  // Near-session reminder (every 5 min): email EVERY cohort member ~15 min
+  // before a session starts. This is independent of the 8 AM cron and of room
+  // membership, so a cohort created same-day (after 8 AM) and people who *joined*
+  // (not just the creator) still get a heads-up right before it begins.
+  @Cron('*/5 * * * *')
+  async notifyUpcomingCohortSessions() {
+    const now = new Date();
+    const soon = new Date(now.getTime() + 20 * 60000);
+    const sessions = await this.prisma.studySession.findMany({
+      where: {
+        status: 'SCHEDULED',
+        reminderSent: false,
+        scheduledAt: { gte: now, lte: soon },
+      },
+      include: {
+        cohort: {
+          include: {
+            members: {
+              include: { user: { select: { id: true, name: true, email: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!sessions.length) return;
+
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    const memberIds = Array.from(
+      new Set(
+        sessions.flatMap((s) => s.cohort.members.map((m) => m.userId).filter(Boolean)),
+      ),
+    );
+    const statsById = await this.computeReminderStats(memberIds);
+
+    for (const session of sessions) {
+      const roomId = session.roomId || session.cohort.roomId;
+      if (!roomId) continue;
+
+      const roomExists = await this.prisma.room.findUnique({
+        where: { roomId },
+        select: { roomId: true },
+      });
+      if (!roomExists) {
+        await this.prisma.studySession
+          .update({ where: { id: session.id }, data: { status: 'CANCELLED' } })
+          .catch(() => undefined);
+        continue;
+      }
+
+      // Mark first so overlapping ticks (the 20-min window spans ~4 ticks) never
+      // double-send, even if the email loop is slow.
+      await this.prisma.studySession
+        .update({ where: { id: session.id }, data: { reminderSent: true } })
+        .catch(() => undefined);
+
+      const joinUrl = `${frontendUrl}/room/${roomId}`;
+      for (const member of session.cohort.members) {
+        if (!member.user?.email) continue;
+        const st = statsById.get(member.userId) ?? {
+          streakDays: 0,
+          weekMinutes: 0,
+          weekSessions: 0,
+          goalMinutes: 0,
+        };
+        await this.emailService.sendSessionReminderEmail(member.user.email, {
+          name: member.user.name,
+          roomName: session.cohort.name,
+          topic: session.topic,
+          startLabel: 'in a few minutes',
+          joinUrl,
+          streakDays: st.streakDays,
+          weekLabel: this.formatMins(st.weekMinutes),
+          sessionsThisWeek: st.weekSessions,
+          goalLabel: st.goalMinutes > 0 ? `${this.formatMins(st.goalMinutes)}/day` : null,
+        });
+      }
+    }
+  }
+
   private formatMins(mins: number): string {
     if (mins < 60) return `${mins}m`;
     const h = Math.floor(mins / 60);
@@ -538,7 +617,10 @@ export class CohortsService {
         for (const s of later) {
           await this.prisma.studySession.update({
             where: { id: s.id },
-            data: { scheduledAt: this.addDays(s.scheduledAt, 1) },
+            data: {
+              scheduledAt: this.addDays(s.scheduledAt, 1),
+              reminderSent: false, // re-arm the near-session reminder for the new day
+            },
           });
         }
       }
@@ -666,18 +748,32 @@ export class CohortsService {
   async joinCohort(cohortId: string, userId: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
-      include: { _count: { select: { members: true } } },
+      select: { roomId: true, maxSize: true, _count: { select: { members: true } } },
     });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort._count.members >= cohort.maxSize) {
       throw new BadRequestException('Cohort is full');
     }
 
-    return this.prisma.cohortMember.upsert({
+    const member = await this.prisma.cohortMember.upsert({
       where: { cohortId_userId: { cohortId, userId } },
       create: { cohortId, userId, progress: {} },
       update: {},
     });
+
+    // Also add them to the cohort's shared room so room-based features (the
+    // 15-min room reminder, attendance context) reach joiners, not just the
+    // creator. Idempotent.
+    if (cohort.roomId) {
+      await this.prisma.roomMember
+        .createMany({
+          data: [{ roomId: cohort.roomId, userId }],
+          skipDuplicates: true,
+        })
+        .catch(() => undefined);
+    }
+
+    return member;
   }
 
   async leaveCohort(cohortId: string, userId: string) {
