@@ -20,10 +20,15 @@ export class MessagesService {
   }
 
   async findByRoom(roomId: string) {
-    return this.prisma.message.findMany({
+    // Return the MOST RECENT 100 messages (newest first from the DB), then
+    // reverse to chronological order for display. The old `asc + take: 100`
+    // returned the OLDEST 100, so once a room passed 100 messages, newer/today's
+    // messages were never fetched and the chat looked like it got flushed.
+    const messages = await this.prisma.message.findMany({
       where: { roomId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: 100,
     });
+    return messages.reverse();
   }
 }
