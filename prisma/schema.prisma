@@ -383,8 +383,10 @@ model StudySession {
   discussionPrompt String?
 
   // Set once the near-session "starting soon" reminder has been emailed, so the
-  // 5-minute cron fires it exactly once (its 20-min window spans several ticks).
+  // 5-minute cron fires it exactly once (its window spans several ticks).
   reminderSent Boolean @default(false)
+  // Set once the ~10-min-after-start "you're missing it" no-show check has run.
+  missedCheckSent Boolean @default(false)
 
   cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   quizAttempts QuizAttempt[]

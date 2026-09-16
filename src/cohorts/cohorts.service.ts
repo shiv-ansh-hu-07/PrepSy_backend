@@ -314,96 +314,18 @@ export class CohortsService {
     return { start, end };
   }
 
-  // ── Daily cohort session engine ─────────────────────────────────────────────
+  // ── Cohort reminder engine ──────────────────────────────────────────────────
+  // Two emails per session (see below): (1) ~15 min before to everyone, and
+  // (2) ~10 min after start to no-shows. The old 8 AM "today's topic" blast was
+  // removed so members get exactly those two, not three overlapping reminders.
 
-  // Each morning (8 AM IST): email members today's topic + room link, and arm
-  // the existing 15-minute room reminder for today's occurrence.
-  @Cron('0 8 * * *', { timeZone: 'Asia/Kolkata' })
-  async notifyTodaysCohortSessions() {
-    const { start, end } = this.dayBounds(new Date());
-    const sessions = await this.prisma.studySession.findMany({
-      where: { status: 'SCHEDULED', scheduledAt: { gte: start, lte: end } },
-      include: {
-        cohort: {
-          include: {
-            members: {
-              include: { user: { select: { id: true, name: true, email: true } } },
-            },
-          },
-        },
-      },
-    });
-
-    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
-
-    // One batched analytics pass for everyone we're about to email.
-    const memberIds = Array.from(
-      new Set(
-        sessions.flatMap((s) =>
-          s.cohort.members.map((m) => m.userId).filter(Boolean),
-        ),
-      ),
-    );
-    const statsById = await this.computeReminderStats(memberIds);
-
-    for (const session of sessions) {
-      const roomId = session.roomId || session.cohort.roomId;
-      if (!roomId) continue;
-
-      // Don't email a room that no longer exists. If the owner deleted the
-      // cohort's room, its StudySessions can linger (no FK to Room) — without
-      // this guard the cron would keep sending "today's session" reminders for
-      // a dead room. Skip and cancel the orphaned session so it stops recurring.
-      const roomExists = await this.prisma.room.findUnique({
-        where: { roomId },
-        select: { roomId: true },
-      });
-      if (!roomExists) {
-        await this.prisma.studySession
-          .update({ where: { id: session.id }, data: { status: 'CANCELLED' } })
-          .catch(() => undefined);
-        continue;
-      }
-      const joinUrl = `${frontendUrl}/room/${roomId}`;
-
-      await this.prisma.room
-        .update({
-          where: { roomId },
-          data: { startTime: session.scheduledAt, remindersent: false },
-        })
-        .catch(() => undefined);
-
-      for (const member of session.cohort.members) {
-        if (!member.user?.email) continue;
-        const st = statsById.get(member.userId) ?? {
-          streakDays: 0,
-          weekMinutes: 0,
-          weekSessions: 0,
-          goalMinutes: 0,
-        };
-        await this.emailService.sendSessionReminderEmail(member.user.email, {
-          name: member.user.name,
-          roomName: session.cohort.name,
-          topic: session.topic,
-          joinUrl,
-          streakDays: st.streakDays,
-          weekLabel: this.formatMins(st.weekMinutes),
-          sessionsThisWeek: st.weekSessions,
-          goalLabel:
-            st.goalMinutes > 0 ? `${this.formatMins(st.goalMinutes)}/day` : null,
-        });
-      }
-    }
-  }
-
-  // Near-session reminder (every 5 min): email EVERY cohort member ~15 min
-  // before a session starts. This is independent of the 8 AM cron and of room
-  // membership, so a cohort created same-day (after 8 AM) and people who *joined*
-  // (not just the creator) still get a heads-up right before it begins.
+  // Reminder 1 — 15 min before each session, to EVERY cohort member. Runs every
+  // 5 min; the ~16-min window + reminderSent flag means each session fires once,
+  // ~15 min out, regardless of when the cohort was created or room membership.
   @Cron('*/5 * * * *')
   async notifyUpcomingCohortSessions() {
     const now = new Date();
-    const soon = new Date(now.getTime() + 20 * 60000);
+    const soon = new Date(now.getTime() + 16 * 60000);
     const sessions = await this.prisma.studySession.findMany({
       where: {
         status: 'SCHEDULED',
@@ -464,12 +386,89 @@ export class CohortsService {
           name: member.user.name,
           roomName: session.cohort.name,
           topic: session.topic,
-          startLabel: 'in a few minutes',
+          startLabel: 'in about 15 minutes',
           joinUrl,
           streakDays: st.streakDays,
           weekLabel: this.formatMins(st.weekMinutes),
           sessionsThisWeek: st.weekSessions,
           goalLabel: st.goalMinutes > 0 ? `${this.formatMins(st.goalMinutes)}/day` : null,
+        });
+      }
+    }
+  }
+
+  // Reminder 2 — ~10 min after a session starts, email members who HAVEN'T
+  // joined the room today: the topic, their streak, and what breaking it costs.
+  // Runs every 5 min; a session is checked once (missedCheckSent) in the window
+  // 8–20 min after its start, so it lands ~10 min in.
+  @Cron('*/5 * * * *')
+  async remindNoShowsAfterStart() {
+    const now = new Date();
+    const lo = new Date(now.getTime() - 20 * 60000);
+    const hi = new Date(now.getTime() - 8 * 60000);
+    const sessions = await this.prisma.studySession.findMany({
+      where: {
+        status: 'SCHEDULED',
+        missedCheckSent: false,
+        scheduledAt: { gte: lo, lte: hi },
+      },
+      include: {
+        cohort: {
+          include: {
+            members: {
+              include: { user: { select: { id: true, name: true, email: true } } },
+            },
+          },
+        },
+      },
+    });
+    if (!sessions.length) return;
+
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    const memberIds = Array.from(
+      new Set(
+        sessions.flatMap((s) => s.cohort.members.map((m) => m.userId).filter(Boolean)),
+      ),
+    );
+    const statsById = await this.computeReminderStats(memberIds);
+
+    for (const session of sessions) {
+      const roomId = session.roomId || session.cohort.roomId;
+      if (!roomId) continue;
+
+      const roomExists = await this.prisma.room.findUnique({
+        where: { roomId },
+        select: { roomId: true },
+      });
+      if (!roomExists) {
+        await this.prisma.studySession
+          .update({ where: { id: session.id }, data: { status: 'CANCELLED' } })
+          .catch(() => undefined);
+        continue;
+      }
+
+      await this.prisma.studySession
+        .update({ where: { id: session.id }, data: { missedCheckSent: true } })
+        .catch(() => undefined);
+
+      // Who has already joined today's room? Only nudge the no-shows.
+      const { start, end } = this.dayBounds(now);
+      const attendance = await this.prisma.roomAttendance.findMany({
+        where: { roomId, joinedAt: { gte: start, lte: end } },
+        select: { userId: true },
+      });
+      const attended = new Set(attendance.map((a) => a.userId));
+
+      const joinUrl = `${frontendUrl}/room/${roomId}`;
+      for (const member of session.cohort.members) {
+        if (!member.user?.email || attended.has(member.userId)) continue;
+        const st = statsById.get(member.userId);
+        await this.emailService.sendMissedSessionEmail(member.user.email, {
+          name: member.user.name,
+          cohortName: session.cohort.name,
+          topic: session.topic,
+          joinUrl,
+          streakDays: st?.streakDays ?? 0,
         });
       }
     }

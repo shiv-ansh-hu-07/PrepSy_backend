@@ -1259,7 +1259,23 @@ export class RoomsService {
       },
     });
 
+    // Cohort rooms have their own reminder engine (15-min-before + 10-min-after
+    // no-show) in CohortsService — skip them here so members aren't double-mailed.
+    const cohortRoomIds = rooms.length
+      ? new Set(
+          (
+            await this.prisma.cohort.findMany({
+              where: { roomId: { in: rooms.map((r) => r.roomId) } },
+              select: { roomId: true },
+            })
+          )
+            .map((c) => c.roomId)
+            .filter((r): r is string => Boolean(r)),
+        )
+      : new Set<string>();
+
     for (const room of rooms) {
+      if (cohortRoomIds.has(room.roomId)) continue;
       const startTime = room.startTime;
       if (!startTime) continue;
 

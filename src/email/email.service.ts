@@ -310,6 +310,48 @@ export class EmailService {
     });
   }
 
+  // ── No-show nudge (~10 min after start) ──────────────────────────────────
+  async sendMissedSessionEmail(
+    to: string,
+    data: {
+      name?: string | null;
+      cohortName: string;
+      topic: string;
+      joinUrl: string;
+      streakDays: number;
+    },
+  ) {
+    if (!(await this.notificationsAllowed(to))) return;
+
+    const name = data.name?.trim() || 'there';
+    const streakLine =
+      data.streakDays > 0
+        ? `You're on a <strong>${data.streakDays}-day streak</strong> 🔥 — miss today and it <strong>resets to 0</strong>.`
+        : `Show up today to <strong>start a streak</strong> — it's the habit that compounds.`;
+
+    await this.sendEmail({
+      to,
+      subject: `You're missing "${data.topic}" — your crew already started`,
+      html: `
+        <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 6px">Your session already started, ${name} ⏰</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${data.cohortName}</strong> · today: ${data.topic}</p>
+          <p style="color:#6b78a0;font-size:13px;margin:0 0 16px">It kicked off about 10 minutes ago and you're not in yet.</p>
+
+          <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 18px;margin:0 0 22px">
+            <p style="color:#c2410c;font-size:14px;line-height:1.6;margin:0">${streakLine} It's not too late — jump in now and keep it alive.</p>
+          </div>
+
+          <a href="${data.joinUrl}" style="display:inline-block;padding:13px 30px;background:#7c3aed;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+            Join now →
+          </a>
+          <p style="color:#9aa4c7;font-size:12px;margin:16px 0 0">Even 20 focused minutes still counts for today.</p>
+          ${this.unsubscribeFooter()}
+        </div>
+      `,
+    });
+  }
+
   async sendCohortSessionEmail(
     to: string,
     cohortName: string,
