@@ -13,6 +13,8 @@ export class MessagesService {
         text: data.text,
         senderId: data.senderId,
         senderName: data.senderName,
+        replyToText: data.replyToText ? data.replyToText.slice(0, 300) : null,
+        replyToSender: data.replyToSender ? data.replyToSender.slice(0, 120) : null,
       },
     });
   }

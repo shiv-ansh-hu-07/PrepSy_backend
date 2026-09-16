@@ -197,6 +197,9 @@ model Message {
   senderId   String?
   senderName String?
   text       String
+  // WhatsApp-style reply: quoted snippet + who said it (denormalized for display).
+  replyToText   String?
+  replyToSender String?
   createdAt  DateTime @default(now())
 
   room Room @relation(fields: [roomId], references: [roomId], onDelete: Cascade)
