@@ -1263,6 +1263,7 @@ export class CohortsService {
       include: {
         playlist: {
           include: {
+            plan: { select: { curriculum: true } },
             videos: {
               select: {
                 ytVideoId: true,
@@ -1285,13 +1286,42 @@ export class CohortsService {
     });
     const current = await this.getRoomCurrentSession(roomId);
 
+    // Hard topic gate: tag each video with its topic + whether it's still locked
+    // (its topic hasn't been unlocked by passing the previous topic's checkpoint).
+    const curriculum =
+      (cohort.playlist?.plan?.curriculum as
+        | Array<{ title?: string; description?: string; videoPositions?: number[] }>
+        | undefined) ?? [];
+    const rawVideos = cohort.playlist?.videos ?? [];
+    const { topics, topicOf } = this.buildTopicGate(curriculum, rawVideos, member?.progress);
+    const unlockedByIndex = new Map(topics.map((t) => [t.index, t.unlocked]));
+    const videos = rawVideos.map((v) => {
+      const ti = topicOf.get(v.ytVideoId);
+      return {
+        ...v,
+        topicIndex: ti ?? null,
+        locked: ti !== undefined ? !unlockedByIndex.get(ti) : false,
+      };
+    });
+
     return {
-      videos: cohort.playlist?.videos ?? [],
+      videos,
       watchedVideoIds: member ? this.getWatchedVideos(member.progress) : [],
       currentVideoId: current?.videoIds?.[0] ?? null,
       // The cohort creator is the default host (drives playback in the live
       // room); the frontend uses this to gate controls + the handoff protocol.
       hostUserId: cohort.createdById,
+      // Topic progression for the in-room lock UI (index/title/unlock state).
+      topics: topics.map((t) => ({
+        index: t.index,
+        title: t.title,
+        unlocked: t.unlocked,
+        passed: t.passed,
+        complete: t.complete,
+        videoCount: t.videoCount,
+        watchedCount: t.watchedCount,
+        canTakeQuiz: t.unlocked && t.complete && t.videoCount > 0,
+      })),
     };
   }
 
@@ -1381,6 +1411,225 @@ export class CohortsService {
       where: { cohortId, userId },
       orderBy: { completedAt: 'desc' },
     });
+  }
+
+  // ── Topic checkpoints (hard-gated) ──────────────────────────────────────────
+
+  // Per-member topic quiz results live in progress.topicQuizzes
+  // ({ [topicIndex]: { score, total, passed, at } }) — same JSON bag as
+  // watchedVideos, so no schema change.
+  private getTopicQuizzes(
+    progress: unknown,
+  ): Record<string, { score: number; total: number; passed: boolean; at: string }> {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const tq = (progress as Record<string, unknown>).topicQuizzes;
+      if (tq && typeof tq === 'object' && !Array.isArray(tq)) {
+        return tq as Record<
+          string,
+          { score: number; total: number; passed: boolean; at: string }
+        >;
+      }
+    }
+    return {};
+  }
+
+  // Build the per-member topic gate from the curriculum: for each topic, its
+  // videos + the caller's watched/complete/passed state, and whether it's
+  // unlocked. HARD GATE: topic N unlocks only once topic N-1's checkpoint quiz
+  // is passed (>= CHECKPOINT_PASS). Topics with no mapped videos pass through so
+  // they can't dead-lock the cohort.
+  private buildTopicGate(
+    curriculum: Array<{ title?: string; description?: string; videoPositions?: number[] }>,
+    videos: Array<{
+      ytVideoId: string;
+      title: string;
+      thumbnailUrl?: string | null;
+      position: number;
+    }>,
+    progress: unknown,
+  ) {
+    const watched = new Set(this.getWatchedVideos(progress));
+    const quizzes = this.getTopicQuizzes(progress);
+    const byPosition = new Map(videos.map((v) => [v.position, v]));
+
+    const topics = curriculum.map((t, index) => {
+      const vids = (t.videoPositions ?? [])
+        .map((p) => byPosition.get(p))
+        .filter((v): v is NonNullable<typeof v> => Boolean(v));
+      const videoIds = vids.map((v) => v.ytVideoId);
+      const watchedCount = videoIds.filter((v) => watched.has(v)).length;
+      const complete = videoIds.length > 0 ? watchedCount === videoIds.length : true;
+      const rec = quizzes[String(index)] ?? null;
+      const passed = Boolean(rec?.passed) || videoIds.length === 0;
+      return {
+        index,
+        title: t.title ?? `Topic ${index + 1}`,
+        description: t.description ?? '',
+        videos: vids.map((v) => ({
+          ytVideoId: v.ytVideoId,
+          title: v.title,
+          thumbnailUrl: v.thumbnailUrl ?? null,
+        })),
+        videoIds,
+        videoCount: videoIds.length,
+        watchedCount,
+        complete,
+        passed,
+        quiz: rec,
+        unlocked: false,
+      };
+    });
+
+    for (let i = 0; i < topics.length; i++) {
+      topics[i].unlocked =
+        i === 0 ? true : topics[i - 1].unlocked && topics[i - 1].passed;
+    }
+
+    const topicOf = new Map<string, number>();
+    for (const t of topics) {
+      for (const v of t.videoIds) if (!topicOf.has(v)) topicOf.set(v, t.index);
+    }
+    return { topics, topicOf };
+  }
+
+  private async loadCurriculumAndVideos(cohortId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        playlist: {
+          include: {
+            plan: { select: { curriculum: true } },
+            videos: {
+              orderBy: { position: 'asc' },
+              select: { ytVideoId: true, title: true, thumbnailUrl: true, position: true },
+            },
+          },
+        },
+      },
+    });
+    const curriculum =
+      (cohort?.playlist?.plan?.curriculum as
+        | Array<{ title?: string; description?: string; videoPositions?: number[] }>
+        | undefined) ?? [];
+    const videos = cohort?.playlist?.videos ?? [];
+    return { cohort, curriculum, videos };
+  }
+
+  // Public: the caller's topic progression (drives the Topics tab + hard gate).
+  async getTopics(cohortId: string, userId: string) {
+    await this.assertMember(cohortId, userId);
+    const { curriculum, videos } = await this.loadCurriculumAndVideos(cohortId);
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const { topics } = this.buildTopicGate(curriculum, videos, member?.progress);
+    return {
+      passRatio: CHECKPOINT_PASS,
+      topics: topics.map((t) => ({
+        index: t.index,
+        title: t.title,
+        description: t.description,
+        videos: t.videos,
+        videoCount: t.videoCount,
+        watchedCount: t.watchedCount,
+        complete: t.complete,
+        passed: t.passed,
+        unlocked: t.unlocked,
+        quiz: t.quiz,
+        canTakeQuiz: t.unlocked && t.complete && t.videoCount > 0,
+      })),
+    };
+  }
+
+  // Generate a checkpoint quiz scoped to one curriculum topic. Refused while the
+  // topic is still locked (hard gate).
+  async generateTopicQuiz(
+    cohortId: string,
+    userId: string,
+    topicIndex: number,
+    numQuestions = 5,
+  ) {
+    await this.assertMember(cohortId, userId);
+    const { cohort, curriculum, videos } = await this.loadCurriculumAndVideos(cohortId);
+    const topicDef = curriculum[topicIndex];
+    if (!cohort?.playlist || !topicDef) throw new NotFoundException('Topic not found');
+
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const { topics } = this.buildTopicGate(curriculum, videos, member?.progress);
+    if (!topics[topicIndex]?.unlocked) {
+      throw new ForbiddenException('Pass the previous topic to unlock this checkpoint');
+    }
+
+    const quizTopics = [topicDef.title, ...topics[topicIndex].videos.map((v) => v.title)].filter(
+      (x): x is string => Boolean(x),
+    );
+    try {
+      const { data } = await axios.post(
+        `${AI_URL}/quiz`,
+        {
+          playlistTitle: `${cohort.playlist.title} — ${topicDef.title ?? ''}`.trim(),
+          topics: quizTopics,
+          numQuestions,
+        },
+        { timeout: 60_000 },
+      );
+      return data;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'AI service unavailable';
+      throw new InternalServerErrorException(`Quiz generation failed: ${msg}`);
+    }
+  }
+
+  // Submit a topic checkpoint: score it, record the pass in progress.topicQuizzes
+  // (sticky — once passed, stays passed, which unlocks the next topic), and keep
+  // a QuizAttempt row for history/mastery.
+  async submitTopicAttempt(
+    cohortId: string,
+    userId: string,
+    topicIndex: number,
+    questions: unknown[],
+    answers: unknown[],
+  ) {
+    await this.assertMember(cohortId, userId);
+    const qs = questions as Array<{ answer: string }>;
+    const ans = answers as string[];
+    let score = 0;
+    qs.forEach((q, i) => { if (ans[i] === q.answer) score++; });
+    const total = qs.length;
+    const passedNow = total > 0 && score / total >= CHECKPOINT_PASS;
+
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const base =
+      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+    const tq = { ...this.getTopicQuizzes(member?.progress) };
+    const prev = tq[String(topicIndex)];
+    const passed = Boolean(prev?.passed) || passedNow;
+    tq[String(topicIndex)] = { score, total, passed, at: new Date().toISOString() };
+
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId, userId } },
+      data: { progress: { ...base, topicQuizzes: tq } },
+    });
+    await this.prisma.quizAttempt.create({
+      data: {
+        cohortId,
+        userId,
+        studySessionId: null,
+        questions: questions as object,
+        answers: answers as object,
+        score,
+      },
+    });
+    return { score, total, passed };
   }
 
   // ── Progress / leaderboard ──────────────────────────────────────────────────
@@ -1635,6 +1884,19 @@ export class CohortsService {
 
     const watched = new Set(this.getWatchedVideos(member.progress));
     if (watched.has(videoId)) return { ok: true, videosWatched: watched.size };
+
+    // Hard topic gate: don't credit a video whose topic is still locked (the
+    // previous topic's checkpoint quiz hasn't been passed). The video may still
+    // play along in a synced session, but it won't count toward progress.
+    const { curriculum, videos } = await this.loadCurriculumAndVideos(cohort.id);
+    if (curriculum.length) {
+      const { topics, topicOf } = this.buildTopicGate(curriculum, videos, member.progress);
+      const ti = topicOf.get(videoId);
+      if (ti !== undefined && !topics[ti].unlocked) {
+        return { ok: false, locked: true, videosWatched: watched.size };
+      }
+    }
+
     watched.add(videoId);
 
     const base =

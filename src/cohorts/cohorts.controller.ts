@@ -242,4 +242,36 @@ export class CohortsController {
   getAttempts(@Param('id') id: string, @Req() req: RequestWithUser) {
     return this.cohorts.getAttempts(id, this.uid(req));
   }
+
+  // ── Topic checkpoints (hard-gated) ──────────────────────────────────────────
+
+  // The caller's topic progression: per-topic videos, watched/complete state,
+  // whether the checkpoint is passed, and whether the topic is unlocked.
+  @Get(':id/topics')
+  getTopics(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getTopics(id, this.uid(req));
+  }
+
+  // Generate a checkpoint quiz for one topic (refused while the topic is locked).
+  @Post(':id/topics/:index/quiz')
+  generateTopicQuiz(
+    @Param('id') id: string,
+    @Param('index') index: string,
+    @Req() req: RequestWithUser,
+    @Body('numQuestions') numQuestions?: number,
+  ) {
+    return this.cohorts.generateTopicQuiz(id, this.uid(req), Number(index), numQuestions);
+  }
+
+  // Submit a topic checkpoint attempt (passing unlocks the next topic).
+  @Post(':id/topics/:index/attempt')
+  submitTopicAttempt(
+    @Param('id') id: string,
+    @Param('index') index: string,
+    @Req() req: RequestWithUser,
+    @Body('questions') questions: unknown[],
+    @Body('answers') answers: string[],
+  ) {
+    return this.cohorts.submitTopicAttempt(id, this.uid(req), Number(index), questions, answers);
+  }
 }
