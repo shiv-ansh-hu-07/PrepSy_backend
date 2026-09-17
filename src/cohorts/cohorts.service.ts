@@ -1263,7 +1263,6 @@ export class CohortsService {
       include: {
         playlist: {
           include: {
-            plan: { select: { curriculum: true } },
             videos: {
               select: {
                 ytVideoId: true,
@@ -1286,42 +1285,13 @@ export class CohortsService {
     });
     const current = await this.getRoomCurrentSession(roomId);
 
-    // Hard topic gate: tag each video with its topic + whether it's still locked
-    // (its topic hasn't been unlocked by passing the previous topic's checkpoint).
-    const curriculum =
-      (cohort.playlist?.plan?.curriculum as
-        | Array<{ title?: string; description?: string; videoPositions?: number[] }>
-        | undefined) ?? [];
-    const rawVideos = cohort.playlist?.videos ?? [];
-    const { topics, topicOf } = this.buildTopicGate(curriculum, rawVideos, member?.progress);
-    const unlockedByIndex = new Map(topics.map((t) => [t.index, t.unlocked]));
-    const videos = rawVideos.map((v) => {
-      const ti = topicOf.get(v.ytVideoId);
-      return {
-        ...v,
-        topicIndex: ti ?? null,
-        locked: ti !== undefined ? !unlockedByIndex.get(ti) : false,
-      };
-    });
-
     return {
-      videos,
+      videos: cohort.playlist?.videos ?? [],
       watchedVideoIds: member ? this.getWatchedVideos(member.progress) : [],
       currentVideoId: current?.videoIds?.[0] ?? null,
       // The cohort creator is the default host (drives playback in the live
       // room); the frontend uses this to gate controls + the handoff protocol.
       hostUserId: cohort.createdById,
-      // Topic progression for the in-room lock UI (index/title/unlock state).
-      topics: topics.map((t) => ({
-        index: t.index,
-        title: t.title,
-        unlocked: t.unlocked,
-        passed: t.passed,
-        complete: t.complete,
-        videoCount: t.videoCount,
-        watchedCount: t.watchedCount,
-        canTakeQuiz: t.unlocked && t.complete && t.videoCount > 0,
-      })),
     };
   }
 
@@ -1480,10 +1450,9 @@ export class CohortsService {
       };
     });
 
-    for (let i = 0; i < topics.length; i++) {
-      topics[i].unlocked =
-        i === 0 ? true : topics[i - 1].unlocked && topics[i - 1].passed;
-    }
+    // No hard gate: every topic is always accessible. The checkpoint quiz is an
+    // optional way to prove a topic, never a lock on the next one or on playback.
+    for (const t of topics) t.unlocked = true;
 
     const topicOf = new Map<string, number>();
     for (const t of topics) {
@@ -1884,19 +1853,6 @@ export class CohortsService {
 
     const watched = new Set(this.getWatchedVideos(member.progress));
     if (watched.has(videoId)) return { ok: true, videosWatched: watched.size };
-
-    // Hard topic gate: don't credit a video whose topic is still locked (the
-    // previous topic's checkpoint quiz hasn't been passed). The video may still
-    // play along in a synced session, but it won't count toward progress.
-    const { curriculum, videos } = await this.loadCurriculumAndVideos(cohort.id);
-    if (curriculum.length) {
-      const { topics, topicOf } = this.buildTopicGate(curriculum, videos, member.progress);
-      const ti = topicOf.get(videoId);
-      if (ti !== undefined && !topics[ti].unlocked) {
-        return { ok: false, locked: true, videosWatched: watched.size };
-      }
-    }
-
     watched.add(videoId);
 
     const base =
