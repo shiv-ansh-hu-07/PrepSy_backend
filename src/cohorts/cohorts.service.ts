@@ -1258,9 +1258,11 @@ export class CohortsService {
   // list with watched marks and let anyone jump to any video. Returns null for
   // non-cohort rooms. `currentVideoId` is the day's suggested starting video.
   async getRoomPlaylist(roomId: string, userId: string) {
+    void userId; // status is cohort-wide (synced for everyone), not per-viewer
     const cohort = await this.prisma.cohort.findFirst({
       where: { roomId },
       include: {
+        members: { select: { progress: true } },
         playlist: {
           include: {
             videos: {
@@ -1279,19 +1281,67 @@ export class CohortsService {
     });
     if (!cohort) return null;
 
-    const member = await this.prisma.cohortMember.findUnique({
-      where: { cohortId_userId: { cohortId: cohort.id, userId } },
-      select: { progress: true },
+    const allVideos = cohort.playlist?.videos ?? [];
+
+    // Cohort-wide "done" set — a synced cohort shows the SAME playlist status to
+    // everyone (what the cohort has watched together), not a per-viewer set.
+    const cohortWatched = new Set<string>();
+    for (const m of cohort.members) {
+      for (const v of this.getWatchedVideos(m.progress)) cohortWatched.add(v);
+    }
+
+    // The cohort's PLAN = every video assigned to a day (+ anything already
+    // watched). Playlist videos never planned were SKIPPED at creation — kept out
+    // of the player so it never wanders into them, but surfaced as a notice.
+    const sessions = await this.prisma.studySession.findMany({
+      where: { cohortId: cohort.id },
+      select: { videoIds: true, studyHours: true },
+      orderBy: { scheduledAt: 'asc' },
     });
+    const planSet = new Set<string>(cohortWatched);
+    for (const s of sessions) for (const v of s.videoIds ?? []) planSet.add(v);
+
+    const planVideos = allVideos.filter((v) => planSet.has(v.ytVideoId));
+    // Legacy/edge: nothing planned yet → fall back to the whole playlist.
+    const effective = planVideos.length ? planVideos : allVideos;
+    const videos = effective.map((v) => ({ ...v, watched: cohortWatched.has(v.ytVideoId) }));
+    const skipped = planVideos.length
+      ? allVideos
+          .filter((v) => !planSet.has(v.ytVideoId))
+          .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title }))
+      : [];
+
+    // Derived pace/ETA — pure arithmetic on durations, no LLM. "Continue from the
+    // shared pointer": remaining unwatched plan duration ÷ the daily budget.
+    const DEFAULT_VIDEO_SEC = 12 * 60;
+    const dur = (v: { durationSec: number | null }) =>
+      v.durationSec && v.durationSec > 0 ? v.durationSec : DEFAULT_VIDEO_SEC;
+    const totalCount = videos.length;
+    const completedCount = videos.filter((v) => v.watched).length;
+    const remainingSec = videos.filter((v) => !v.watched).reduce((a, v) => a + dur(v), 0);
+    const dailyBudgetSec = (sessions.find((s) => s.studyHours)?.studyHours ?? 2) * 3600 || 2 * 3600;
+    const etaDays = remainingSec > 0 ? Math.ceil(remainingSec / dailyBudgetSec) : 0;
+
     const current = await this.getRoomCurrentSession(roomId);
 
     return {
-      videos: cohort.playlist?.videos ?? [],
-      watchedVideoIds: member ? this.getWatchedVideos(member.progress) : [],
+      videos,
+      watchedVideoIds: [...cohortWatched].filter((id) => planSet.has(id)),
       currentVideoId: current?.videoIds?.[0] ?? null,
       // The cohort creator is the default host (drives playback in the live
       // room); the frontend uses this to gate controls + the handoff protocol.
       hostUserId: cohort.createdById,
+      // Videos left out of the plan at creation (shown as a notice, not playable).
+      skipped,
+      skippedCount: skipped.length,
+      // Shared course progress derived from the pointer — drives the pace/ETA bar.
+      progress: {
+        completedCount,
+        totalCount,
+        percent: totalCount ? Math.round((completedCount / totalCount) * 100) : 0,
+        remainingSec,
+        etaDays,
+      },
     };
   }
 
