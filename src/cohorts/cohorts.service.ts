@@ -166,6 +166,7 @@ export class CohortsService {
       }
     }
 
+    await this.syncCreationSkipped(cohort.id);
     return this.getCohort(cohort.id, userId);
   }
 
@@ -290,7 +291,33 @@ export class CohortsService {
       });
     }
 
+    await this.syncCreationSkipped(cohortId);
     return this.getCohort(cohortId, userId);
+  }
+
+  // Record which playlist videos were left out of the plan at creation → they go
+  // into the cohort's skipped set (excluded from the schedule, offered as catch-up).
+  private async syncCreationSkipped(cohortId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: { playlist: { include: { videos: { select: { ytVideoId: true } } } } },
+    });
+    if (!cohort?.playlist) return;
+    const sessions = await this.prisma.studySession.findMany({
+      where: { cohortId },
+      select: { videoIds: true },
+    });
+    const planned = new Set<string>();
+    for (const s of sessions) for (const v of s.videoIds ?? []) planned.add(v);
+    // Only meaningful once there IS a plan; an empty plan means "not scheduled yet".
+    if (!planned.size) return;
+    const skipped = cohort.playlist.videos
+      .map((v) => v.ytVideoId)
+      .filter((id) => !planned.has(id));
+    await this.prisma.cohort.update({
+      where: { id: cohortId },
+      data: { skippedVideoIds: skipped },
+    });
   }
 
   private addDays(date: Date, days: number): Date {
@@ -642,11 +669,14 @@ export class CohortsService {
       }
     }
 
-    // Re-pack each cohort that lapsed a day so the leftover videos land in the
-    // upcoming days instead of vanishing. Best-effort; never throws.
-    for (const cohortId of lapsed) {
-      await this.recomputeScheduleFromProgress(cohortId).catch(() => undefined);
+    // Session-end checkpoint for every cohort that met yesterday: classify each
+    // video (completed / started / skipped) from the shared pointer, drop the
+    // skipped ones into catch-up, and re-pack the remaining plan. This also
+    // covers the lapsed carry-forward (endCohortSession recomputes). Best-effort.
+    for (const cohortId of cohortIds) {
+      await this.endCohortSession(cohortId).catch(() => undefined);
     }
+    void lapsed;
   }
 
   // Recommend cohorts the user isn't in, matched on how well the playlist topic
@@ -1290,26 +1320,21 @@ export class CohortsService {
       for (const v of this.getWatchedVideos(m.progress)) cohortWatched.add(v);
     }
 
-    // The cohort's PLAN = every video assigned to a day (+ anything already
-    // watched). Playlist videos never planned were SKIPPED at creation — kept out
-    // of the player so it never wanders into them, but surfaced as a notice.
+    // The cohort's PLAN = the playlist MINUS the skipped set (the authoritative
+    // "not in the plan" list — skipped at creation OR jumped past in a session).
+    // Skipped videos stay out of the player and pace, and are offered as catch-up.
     const sessions = await this.prisma.studySession.findMany({
       where: { cohortId: cohort.id },
-      select: { videoIds: true, studyHours: true },
+      select: { studyHours: true },
       orderBy: { scheduledAt: 'asc' },
     });
-    const planSet = new Set<string>(cohortWatched);
-    for (const s of sessions) for (const v of s.videoIds ?? []) planSet.add(v);
-
-    const planVideos = allVideos.filter((v) => planSet.has(v.ytVideoId));
-    // Legacy/edge: nothing planned yet → fall back to the whole playlist.
-    const effective = planVideos.length ? planVideos : allVideos;
-    const videos = effective.map((v) => ({ ...v, watched: cohortWatched.has(v.ytVideoId) }));
-    const skipped = planVideos.length
-      ? allVideos
-          .filter((v) => !planSet.has(v.ytVideoId))
-          .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title }))
-      : [];
+    const skippedSet = new Set(cohort.skippedVideoIds ?? []);
+    const videos = allVideos
+      .filter((v) => !skippedSet.has(v.ytVideoId))
+      .map((v) => ({ ...v, watched: cohortWatched.has(v.ytVideoId) }));
+    const skipped = allVideos
+      .filter((v) => skippedSet.has(v.ytVideoId))
+      .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title }));
 
     // Derived pace/ETA — pure arithmetic on durations, no LLM. "Continue from the
     // shared pointer": remaining unwatched plan duration ÷ the daily budget.
@@ -1326,12 +1351,13 @@ export class CohortsService {
 
     return {
       videos,
-      watchedVideoIds: [...cohortWatched].filter((id) => planSet.has(id)),
+      watchedVideoIds: [...cohortWatched].filter((id) => !skippedSet.has(id)),
       currentVideoId: current?.videoIds?.[0] ?? null,
       // The cohort creator is the default host (drives playback in the live
       // room); the frontend uses this to gate controls + the handoff protocol.
       hostUserId: cohort.createdById,
-      // Videos left out of the plan at creation (shown as a notice, not playable).
+      // Videos not in the plan (skipped at creation or during a session) — shown
+      // as an optional catch-up list, never played on the shared stage.
       skipped,
       skippedCount: skipped.length,
       // Shared course progress derived from the pointer — drives the pace/ETA bar.
@@ -1989,6 +2015,9 @@ export class CohortsService {
         for (const vid of s.videoIds ?? []) covered.add(vid);
       }
     }
+    // Skipped videos are excluded from the plan entirely — never re-scheduled, so
+    // they don't affect the room's pace/ETA (they live in the catch-up list).
+    for (const vid of cohort.skippedVideoIds ?? []) covered.add(vid);
     const remaining = videos.filter((v) => !covered.has(v.ytVideoId));
 
     const durSec = (v: { durationSec: number | null }) =>
@@ -2103,6 +2132,94 @@ export class CohortsService {
       throw new ForbiddenException('Only the creator can recompute the schedule');
     }
     return this.recomputeScheduleFromProgress(cohortId);
+  }
+
+  // ── Session-end checkpoint ──────────────────────────────────────────────────
+
+  // Classify each video from what actually happened on the shared stage, then
+  // move the schedule. Cohort-level states drive the ONE shared plan:
+  //   • completed — in the cohort-watched set → dropped by the recompute.
+  //   • started   — the resume point (RoomVideoState pointer) → stays in the plan.
+  //   • skipped   — a video the cohort jumped PAST (before the furthest-reached
+  //                 point, unwatched, not the resume point) → dropped from the
+  //                 plan into the catch-up set, so it never affects pace.
+  // (missed is per-user — handled by attendance + the nudge email, never the
+  // shared schedule.) Idempotent; safe to call on host "end session" and nightly.
+  async endCohortSession(cohortId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: { select: { progress: true } },
+        playlist: {
+          include: {
+            videos: { select: { ytVideoId: true }, orderBy: { position: 'asc' } },
+          },
+        },
+      },
+    });
+    if (!cohort?.roomId || !cohort.playlist) return { ok: false, skipped: 0 };
+
+    const videos = cohort.playlist.videos ?? [];
+    const indexOf = new Map(videos.map((v, i) => [v.ytVideoId, i]));
+
+    const watched = new Set<string>();
+    for (const m of cohort.members) {
+      for (const v of this.getWatchedVideos(m.progress)) watched.add(v);
+    }
+    const already = new Set(cohort.skippedVideoIds ?? []);
+
+    const state = await this.prisma.roomVideoState.findUnique({
+      where: { roomId: cohort.roomId },
+      select: { videoId: true },
+    });
+    const reachedId = state?.videoId ?? null;
+
+    // Furthest point the cohort reached = the max index across watched videos and
+    // the current pointer (handles back-jumps too).
+    let furthest = reachedId != null ? indexOf.get(reachedId) ?? -1 : -1;
+    for (const w of watched) {
+      const i = indexOf.get(w);
+      if (i != null && i > furthest) furthest = i;
+    }
+    if (furthest < 0) return { ok: true, skipped: 0 };
+
+    const newlySkipped: string[] = [];
+    for (const v of videos) {
+      const i = indexOf.get(v.ytVideoId) ?? -1;
+      if (
+        i > -1 &&
+        i < furthest &&
+        !watched.has(v.ytVideoId) &&
+        v.ytVideoId !== reachedId &&
+        !already.has(v.ytVideoId)
+      ) {
+        newlySkipped.push(v.ytVideoId);
+      }
+    }
+
+    if (newlySkipped.length) {
+      await this.prisma.cohort.update({
+        where: { id: cohortId },
+        data: { skippedVideoIds: [...already, ...newlySkipped] },
+      });
+    }
+    // Recompute the remaining plan (drops completed + skipped, keeps the started
+    // resume point, re-packs the rest) — pure arithmetic, no LLM.
+    await this.recomputeScheduleFromProgress(cohortId).catch(() => undefined);
+    return { ok: true, skipped: newlySkipped.length };
+  }
+
+  // Host-triggered "end today's session" (creator only), same engine as nightly.
+  async endCohortSessionByRoom(roomId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true, createdById: true },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    if (cohort.createdById !== userId) {
+      throw new ForbiddenException('Only the host can end the session');
+    }
+    return this.endCohortSession(cohort.id);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

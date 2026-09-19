@@ -194,6 +194,13 @@ export class CohortsController {
     return this.cohorts.markVideoWatched(roomId, this.uid(req), videoId);
   }
 
+  // Host "end today's session": classify each video (completed/started/skipped)
+  // from the shared pointer and move the schedule accordingly (creator only).
+  @Post('by-room/:roomId/end-session')
+  endSession(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.cohorts.endCohortSessionByRoom(roomId, this.uid(req));
+  }
+
   @Post(':id/sessions')
   createSession(
     @Param('id') id: string,

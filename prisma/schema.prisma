@@ -335,6 +335,10 @@ model Cohort {
   startMode   String?   // "NOW" | "SCHEDULED"
   dailyTime   String?   // daily session time, "HH:MM" (for display)
   startDate   DateTime? // first session date/time
+  // Videos excluded from the active plan — skipped at creation or jumped past
+  // during a session. They never affect the schedule/pace and are offered as
+  // optional catch-up. This is the authoritative "not in the plan" set.
+  skippedVideoIds String[] @default([])
 
   playlist     Playlist         @relation(fields: [playlistId], references: [id])
   createdBy    User             @relation("UserCreatedCohorts", fields: [createdById], references: [id])
