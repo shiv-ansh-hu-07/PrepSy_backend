@@ -1486,6 +1486,49 @@ export class CohortsService {
     });
   }
 
+  // Live in-room "pop quiz": any member can fire it, and it's scoped to the video
+  // currently on the stage. Returns questions to broadcast to the whole room — a
+  // quick, shared, eventful break. Not persisted (it's a live moment, not a grade).
+  async generatePopQuiz(
+    roomId: string,
+    userId: string,
+    videoId?: string,
+    numQuestions = 4,
+  ) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      include: {
+        playlist: { include: { videos: { select: { ytVideoId: true, title: true } } } },
+      },
+    });
+    if (!cohort?.playlist) throw new NotFoundException('Cohort not found');
+    await this.assertMember(cohort.id, userId);
+
+    const findTitle = (vid?: string | null) =>
+      vid ? cohort.playlist!.videos.find((v) => v.ytVideoId === vid)?.title ?? null : null;
+    let topic = findTitle(videoId);
+    if (!topic) {
+      const current = await this.getRoomCurrentSession(roomId);
+      topic = findTitle(current?.videoIds?.[0]) || current?.topic || cohort.playlist.title;
+    }
+
+    try {
+      const { data } = await axios.post(
+        `${AI_URL}/quiz`,
+        {
+          playlistTitle: `${cohort.playlist.title} — ${topic}`,
+          topics: [topic].filter(Boolean),
+          numQuestions,
+        },
+        { timeout: 60_000 },
+      );
+      return { questions: data.questions, topic };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'AI service unavailable';
+      throw new InternalServerErrorException(`Quiz generation failed: ${msg}`);
+    }
+  }
+
   // ── Topic checkpoints (hard-gated) ──────────────────────────────────────────
 
   // Per-member topic quiz results live in progress.topicQuizzes

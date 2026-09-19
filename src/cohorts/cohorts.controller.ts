@@ -230,6 +230,18 @@ export class CohortsController {
     return this.cohorts.endCohortSessionByRoom(roomId, this.uid(req));
   }
 
+  // Live in-room "pop quiz" for the current video — any member can fire it; the
+  // client broadcasts the returned questions to the whole room.
+  @Post('by-room/:roomId/pop-quiz')
+  popQuiz(
+    @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
+    @Body('videoId') videoId?: string,
+    @Body('numQuestions') numQuestions?: number,
+  ) {
+    return this.cohorts.generatePopQuiz(roomId, this.uid(req), videoId, numQuestions);
+  }
+
   @Post(':id/sessions')
   createSession(
     @Param('id') id: string,
