@@ -339,6 +339,9 @@ model Cohort {
   // during a session. They never affect the schedule/pace and are offered as
   // optional catch-up. This is the authoritative "not in the plan" set.
   skippedVideoIds String[] @default([])
+  // Surprise "fastest-finger" quizzes fire at random (host-driven) during a live
+  // session to keep everyone attentive. Creator can turn it off per cohort.
+  surpriseQuiz Boolean @default(true)
 
   playlist     Playlist         @relation(fields: [playlistId], references: [id])
   createdBy    User             @relation("UserCreatedCohorts", fields: [createdById], references: [id])

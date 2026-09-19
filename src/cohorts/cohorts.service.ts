@@ -41,6 +41,7 @@ export interface UpdateCohortInput {
   name?: string;
   dailyTime?: string;
   startDate?: string;
+  surpriseQuiz?: boolean;
 }
 
 export interface SetPlanInput {
@@ -183,9 +184,11 @@ export class CohortsService {
       name?: string;
       dailyTime?: string;
       startDate?: Date;
+      surpriseQuiz?: boolean;
     } = {};
     if (typeof input.name === 'string' && input.name.trim()) data.name = input.name.trim();
     if (typeof input.dailyTime === 'string') data.dailyTime = input.dailyTime;
+    if (typeof input.surpriseQuiz === 'boolean') data.surpriseQuiz = input.surpriseQuiz;
     if (input.startDate) {
       const d = new Date(input.startDate);
       if (!Number.isNaN(d.getTime())) data.startDate = d;
@@ -1383,6 +1386,8 @@ export class CohortsService {
       // The cohort creator is the default host (drives playback in the live
       // room); the frontend uses this to gate controls + the handoff protocol.
       hostUserId: cohort.createdById,
+      // Whether surprise fastest-finger quizzes are enabled for this cohort.
+      surpriseQuiz: cohort.surpriseQuiz,
       // Videos not in the plan (skipped at creation or during a session) — shown
       // as an optional catch-up list, never played on the shared stage.
       skipped,
@@ -1527,6 +1532,52 @@ export class CohortsService {
       const msg = err instanceof Error ? err.message : 'AI service unavailable';
       throw new InternalServerErrorException(`Quiz generation failed: ${msg}`);
     }
+  }
+
+  // ── Quiz scoreboard (running cohort-wide tally) ─────────────────────────────
+
+  private getQuizPoints(progress: unknown): number {
+    if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
+      const p = (progress as Record<string, unknown>).quizPoints;
+      if (typeof p === 'number' && Number.isFinite(p)) return p;
+    }
+    return 0;
+  }
+
+  // Add a fastest-finger round's points to the caller's running total (stored in
+  // CohortMember.progress.quizPoints — no schema change). Returns the scoreboard.
+  async addQuizPoints(cohortId: string, userId: string, points: number) {
+    await this.assertMember(cohortId, userId);
+    const add = Math.max(0, Math.round(Number(points) || 0));
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId, userId } },
+      select: { progress: true },
+    });
+    const base =
+      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+        ? (member.progress as Record<string, unknown>)
+        : {};
+    const total = this.getQuizPoints(member?.progress) + add;
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId, userId } },
+      data: { progress: { ...base, quizPoints: total } },
+    });
+    return this.getScoreboard(cohortId);
+  }
+
+  // Running cohort-wide quiz scoreboard, ranked by total points.
+  async getScoreboard(cohortId: string) {
+    const members = await this.prisma.cohortMember.findMany({
+      where: { cohortId },
+      select: { userId: true, progress: true, user: { select: { name: true } } },
+    });
+    return members
+      .map((m) => ({
+        userId: m.userId,
+        name: m.user?.name || 'Member',
+        points: this.getQuizPoints(m.progress),
+      }))
+      .sort((a, b) => b.points - a.points);
   }
 
   // ── Topic checkpoints (hard-gated) ──────────────────────────────────────────

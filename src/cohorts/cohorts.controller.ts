@@ -291,6 +291,22 @@ export class CohortsController {
     return this.cohorts.getAttempts(id, this.uid(req));
   }
 
+  // Running cohort-wide quiz scoreboard (fastest-finger points).
+  @Get(':id/scoreboard')
+  getScoreboard(@Param('id') id: string) {
+    return this.cohorts.getScoreboard(id);
+  }
+
+  // Add a fastest-finger round's points to the caller's running total.
+  @Post(':id/quiz/score')
+  addQuizPoints(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Body('points') points: number,
+  ) {
+    return this.cohorts.addQuizPoints(id, this.uid(req), points);
+  }
+
   // ── Topic checkpoints (hard-gated) ──────────────────────────────────────────
 
   // The caller's topic progression: per-topic videos, watched/complete state,
