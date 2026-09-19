@@ -1111,11 +1111,15 @@ export class CohortsService {
     text: string,
   ) {
     await this.assertMember(cohortId, userId);
-    const session = await this.prisma.studySession.findFirst({
-      where: { id: sessionId, cohortId },
-      select: { id: true },
-    });
-    if (!session) throw new NotFoundException('Session not found');
+    // "general" is the cohort-wide notes pad for cohorts without a day schedule;
+    // otherwise the key must be a real StudySession of this cohort.
+    if (sessionId !== 'general') {
+      const session = await this.prisma.studySession.findFirst({
+        where: { id: sessionId, cohortId },
+        select: { id: true },
+      });
+      if (!session) throw new NotFoundException('Session not found');
+    }
 
     const member = await this.prisma.cohortMember.findUnique({
       where: { cohortId_userId: { cohortId, userId } },
@@ -1381,6 +1385,9 @@ export class CohortsService {
 
     return {
       videos,
+      // The cohort id — so the room knows it's a cohort even when no schedule
+      // (StudySession) exists yet; gates the cohort label, Notes tab, quiz, etc.
+      cohortId: cohort.id,
       watchedVideoIds: [...cohortWatched].filter((id) => !skippedSet.has(id)),
       currentVideoId: current?.videoIds?.[0] ?? null,
       // The cohort creator is the default host (drives playback in the live
