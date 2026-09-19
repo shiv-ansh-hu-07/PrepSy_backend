@@ -409,6 +409,11 @@ model DiscussionPost {
   studySessionId String? // set when the thread is scoped to a checkpoint/day
   createdAt      DateTime @default(now())
 
+  // Optional file attachment (image or document) uploaded to S3.
+  attachmentUrl  String?
+  attachmentName String?
+  attachmentType String?
+
   cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   author       User             @relation("UserDiscussions", fields: [authorId], references: [id])
   parent       DiscussionPost?  @relation("Replies", fields: [parentId], references: [id])

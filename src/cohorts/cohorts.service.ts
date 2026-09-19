@@ -6,6 +6,7 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { S3Service } from '../s3/s3.service';
 import { Prisma } from '@prisma/client';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
@@ -61,6 +62,7 @@ export class CohortsService {
   constructor(
     private prisma: PrismaService,
     private emailService: EmailService,
+    private s3: S3Service,
   ) {}
 
   // ── Cohorts ───────────────────────────────────────────────────────────────
@@ -949,18 +951,43 @@ export class CohortsService {
     content: string,
     parentId?: string,
     studySessionId?: string,
+    attachment?: { url: string; name?: string; type?: string },
   ) {
     await this.assertMember(cohortId, userId);
+    // Allow an attachment-only post (no text), but not a fully empty one.
+    if (!content?.trim() && !attachment?.url) {
+      throw new BadRequestException('Write something or attach a file.');
+    }
     return this.prisma.discussionPost.create({
       data: {
         cohortId,
         authorId: userId,
-        content,
+        content: content ?? '',
         parentId: parentId ?? null,
         studySessionId: studySessionId ?? null,
+        attachmentUrl: attachment?.url ?? null,
+        attachmentName: attachment?.name ?? null,
+        attachmentType: attachment?.type ?? null,
       },
       include: { author: { select: { id: true, name: true } } },
     });
+  }
+
+  // Upload a discussion attachment (image/document) to S3 and return its URL +
+  // metadata; the client then includes it when posting the message.
+  async uploadDiscussionMedia(
+    cohortId: string,
+    userId: string,
+    file: Express.Multer.File,
+  ) {
+    await this.assertMember(cohortId, userId);
+    const url = await this.s3.uploadChatMedia(
+      userId,
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
+    return { url, name: file.originalname, type: file.mimetype };
   }
 
   // ── Study Sessions ────────────────────────────────────────────────────────

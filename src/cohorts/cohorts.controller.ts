@@ -9,8 +9,13 @@ import {
   Body,
   Req,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { CohortsService } from './cohorts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import type { RequestWithUser } from '../auth/auth-user.interface';
@@ -155,8 +160,32 @@ export class CohortsController {
     @Body('content') content: string,
     @Body('parentId') parentId?: string,
     @Body('studySessionId') studySessionId?: string,
+    @Body('attachmentUrl') attachmentUrl?: string,
+    @Body('attachmentName') attachmentName?: string,
+    @Body('attachmentType') attachmentType?: string,
   ) {
-    return this.cohorts.postDiscussion(id, this.uid(req), content, parentId, studySessionId);
+    const attachment = attachmentUrl
+      ? { url: attachmentUrl, name: attachmentName, type: attachmentType }
+      : undefined;
+    return this.cohorts.postDiscussion(id, this.uid(req), content, parentId, studySessionId, attachment);
+  }
+
+  // Upload a discussion attachment (image/document); returns { url, name, type }
+  // to include when posting the message.
+  @Post(':id/discussions/media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB
+    }),
+  )
+  uploadDiscussionMedia(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('No file provided.');
+    return this.cohorts.uploadDiscussionMedia(id, this.uid(req), file);
   }
 
   // ── Study Sessions ────────────────────────────────────────────────────────
