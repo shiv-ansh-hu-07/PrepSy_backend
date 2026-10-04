@@ -1183,6 +1183,97 @@ export class CohortsService {
     });
   }
 
+  // ── Video flags (timestamped checkpoints) ─────────────────────────────────
+
+  // Pin a note to a moment in one of the cohort's playlist videos.
+  async createFlag(
+    cohortId: string,
+    userId: string,
+    input: { videoId?: string; timeSec?: number; content?: string },
+  ) {
+    await this.assertMember(cohortId, userId);
+    const content = (input.content || '').trim().slice(0, 1000);
+    if (!content) throw new BadRequestException('Write a note for the flag.');
+    const timeSec = Math.round(Number(input.timeSec));
+    if (!Number.isFinite(timeSec) || timeSec < 0 || timeSec > 24 * 3600) {
+      throw new BadRequestException('Invalid time for the flag.');
+    }
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      select: { playlistId: true },
+    });
+    const video = input.videoId
+      ? await this.prisma.playlistVideo.findFirst({
+          where: { playlistId: cohort?.playlistId, ytVideoId: input.videoId },
+          select: { ytVideoId: true },
+        })
+      : null;
+    if (!video)
+      throw new BadRequestException('That video is not in this cohort.');
+
+    return this.prisma.discussionPost.create({
+      data: {
+        cohortId,
+        authorId: userId,
+        content,
+        videoId: video.ytVideoId,
+        timeSec,
+      },
+      include: {
+        author: { select: { id: true, name: true } },
+        replies: {
+          include: { author: { select: { id: true, name: true } } },
+        },
+      },
+    });
+  }
+
+  // All flags (optionally one video's), in video-time order, with replies.
+  async getFlags(cohortId: string, userId: string, videoId?: string) {
+    await this.assertMember(cohortId, userId);
+    return this.prisma.discussionPost.findMany({
+      where: {
+        cohortId,
+        parentId: null,
+        videoId: videoId ? videoId : { not: null },
+      },
+      include: {
+        author: { select: { id: true, name: true } },
+        replies: {
+          include: { author: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+      orderBy: [{ videoId: 'asc' }, { timeSec: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  // Remove a flag (its author or the cohort creator), with its replies.
+  async deleteFlag(cohortId: string, userId: string, flagId: string) {
+    const flag = await this.prisma.discussionPost.findUnique({
+      where: { id: flagId },
+      select: {
+        cohortId: true,
+        authorId: true,
+        videoId: true,
+        cohort: { select: { createdById: true } },
+      },
+    });
+    if (!flag || flag.cohortId !== cohortId || !flag.videoId) {
+      throw new NotFoundException('Flag not found');
+    }
+    if (flag.authorId !== userId && flag.cohort.createdById !== userId) {
+      throw new ForbiddenException(
+        'Only its author or the cohort creator can remove a flag',
+      );
+    }
+    await this.prisma.$transaction([
+      this.prisma.discussionPost.deleteMany({ where: { parentId: flagId } }),
+      this.prisma.discussionPost.delete({ where: { id: flagId } }),
+    ]);
+    return { ok: true };
+  }
+
   // Upload a discussion attachment (image/document) to S3 and return its URL +
   // metadata; the client then includes it when posting the message.
   async uploadDiscussionMedia(
@@ -1656,14 +1747,14 @@ export class CohortsService {
       surpriseQuiz: cohort.surpriseQuiz,
       // "SYNC" (shared player) or "SOLO" (everyone at their own pace).
       syncMode: solo ? 'SOLO' : 'SYNC',
-      // SOLO: the viewer's own resume point (their last heartbeat).
-      myPosition:
-        solo && me?.watchingVideoId
-          ? {
-              videoId: me.watchingVideoId,
-              positionSec: me.watchingPositionSec,
-            }
-          : null,
+      // The viewer's own last spot (their last heartbeat). SOLO resumes from
+      // it; SYNC uses it only when the room has no saved spot yet.
+      myPosition: me?.watchingVideoId
+        ? {
+            videoId: me.watchingVideoId,
+            positionSec: me.watchingPositionSec,
+          }
+        : null,
       // Videos not in the plan (skipped at creation or during a session) — shown
       // as an optional catch-up list, never played on the shared stage.
       skipped,

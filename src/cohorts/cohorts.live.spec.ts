@@ -192,3 +192,80 @@ describe('getLiveBoard', () => {
     expect(board.liveCount).toBe(1);
   });
 });
+
+describe('video flags', () => {
+  const make = (video: unknown, flag: unknown = null) => {
+    const create = jest.fn(({ data }) => Promise.resolve(data));
+    const svc = svcWith({
+      cohortMember: { findUnique: jest.fn().mockResolvedValue({ id: 'm' }) },
+      cohort: { findUnique: jest.fn().mockResolvedValue({ playlistId: 'p1' }) },
+      playlistVideo: { findFirst: jest.fn().mockResolvedValue(video) },
+      discussionPost: {
+        create,
+        findUnique: jest.fn().mockResolvedValue(flag),
+        deleteMany: jest.fn().mockResolvedValue({}),
+        delete: jest.fn().mockResolvedValue({}),
+      },
+      $transaction: jest.fn().mockResolvedValue([]),
+    });
+    return { svc, create };
+  };
+
+  it('pins a note to a moment in a cohort video', async () => {
+    const { svc, create } = make({ ytVideoId: 'v1' });
+    const f: any = await svc.createFlag('c1', 'u1', {
+      videoId: 'v1',
+      timeSec: 1200.4,
+      content: ' key formula ',
+    });
+    expect(f).toMatchObject({
+      videoId: 'v1',
+      timeSec: 1200,
+      content: 'key formula',
+      authorId: 'u1',
+    });
+    expect(create).toHaveBeenCalled();
+  });
+
+  it('rejects videos outside the playlist, bad times and empty notes', async () => {
+    await expect(
+      make(null).svc.createFlag('c1', 'u1', {
+        videoId: 'x',
+        timeSec: 5,
+        content: 'hi',
+      }),
+    ).rejects.toThrow();
+    await expect(
+      make({ ytVideoId: 'v1' }).svc.createFlag('c1', 'u1', {
+        videoId: 'v1',
+        timeSec: -3,
+        content: 'hi',
+      }),
+    ).rejects.toThrow();
+    await expect(
+      make({ ytVideoId: 'v1' }).svc.createFlag('c1', 'u1', {
+        videoId: 'v1',
+        timeSec: 5,
+        content: '  ',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('only the author or the cohort creator can remove a flag', async () => {
+    const flag = {
+      cohortId: 'c1',
+      authorId: 'a',
+      videoId: 'v1',
+      cohort: { createdById: 'boss' },
+    };
+    await expect(
+      make(null, flag).svc.deleteFlag('c1', 'stranger', 'f1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      make(null, flag).svc.deleteFlag('c1', 'a', 'f1'),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      make(null, flag).svc.deleteFlag('c1', 'boss', 'f1'),
+    ).resolves.toEqual({ ok: true });
+  });
+});

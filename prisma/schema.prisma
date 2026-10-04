@@ -435,6 +435,12 @@ model DiscussionPost {
   attachmentName String?
   attachmentType String?
 
+  // Video flag ("checkpointer"): a post pinned to a moment in a playlist video,
+  // e.g. 20:00 in video X. Everyone in the cohort sees it at that point and can
+  // reply (replies are ordinary child posts via parentId).
+  videoId String?
+  timeSec Int?
+
   cohort       Cohort           @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   author       User             @relation("UserDiscussions", fields: [authorId], references: [id])
   parent       DiscussionPost?  @relation("Replies", fields: [parentId], references: [id])
@@ -443,6 +449,7 @@ model DiscussionPost {
 
   @@index([cohortId, createdAt])
   @@index([studySessionId])
+  @@index([cohortId, videoId])
 }
 
 model QuizAttempt {

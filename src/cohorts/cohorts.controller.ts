@@ -176,6 +176,41 @@ export class CohortsController {
     return this.cohorts.getDiscussionPrompt(id, this.uid(req), sessionId);
   }
 
+  // ── Video flags: notes pinned to a moment in a video; replies go through
+  // POST :id/discussions with parentId = the flag's id.
+  @Get(':id/flags')
+  getFlags(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Query('videoId') videoId?: string,
+  ) {
+    return this.cohorts.getFlags(id, this.uid(req), videoId);
+  }
+
+  @Post(':id/flags')
+  createFlag(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Body('videoId') videoId?: string,
+    @Body('timeSec') timeSec?: number,
+    @Body('content') content?: string,
+  ) {
+    return this.cohorts.createFlag(id, this.uid(req), {
+      videoId,
+      timeSec,
+      content,
+    });
+  }
+
+  @Delete(':id/flags/:flagId')
+  deleteFlag(
+    @Param('id') id: string,
+    @Param('flagId') flagId: string,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.cohorts.deleteFlag(id, this.uid(req), flagId);
+  }
+
   @Post(':id/discussions')
   postDiscussion(
     @Param('id') id: string,
