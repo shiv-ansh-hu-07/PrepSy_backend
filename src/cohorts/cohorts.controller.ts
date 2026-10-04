@@ -64,14 +64,29 @@ export class CohortsController {
     return this.cohorts.recommendedCohorts(this.uid(req));
   }
 
+  // ?invite=<code> lets a non-member preview (and then join) a private cohort.
   @Get(':id')
-  get(@Param('id') id: string, @Req() req: RequestWithUser) {
-    return this.cohorts.getCohort(id, this.uid(req));
+  get(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Query('invite') invite?: string,
+  ) {
+    return this.cohorts.getCohort(id, this.uid(req), invite);
+  }
+
+  // Live scoreboard: study time, what each member is watching now, progress.
+  @Get(':id/live')
+  liveBoard(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getLiveBoard(id, this.uid(req));
   }
 
   @Post(':id/join')
-  join(@Param('id') id: string, @Req() req: RequestWithUser) {
-    return this.cohorts.joinCohort(id, this.uid(req));
+  join(
+    @Param('id') id: string,
+    @Req() req: RequestWithUser,
+    @Body('invite') invite?: string,
+  ) {
+    return this.cohorts.joinCohort(id, this.uid(req), invite);
   }
 
   // "Meet your crew" — members with their intro/goal + prep-for.
@@ -232,6 +247,30 @@ export class CohortsController {
 
   // Record that the caller finished a video in this cohort room (per-member
   // progress). No-ops for non-cohort rooms / non-members.
+  // Room heartbeat (~15s): current video/position + accrues study time.
+  @Post('by-room/:roomId/presence')
+  presence(
+    @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
+    @Body('videoId') videoId?: string,
+    @Body('positionSec') positionSec?: number,
+    @Body('playing') playing?: boolean,
+  ) {
+    return this.cohorts.updatePresence(roomId, this.uid(req), {
+      videoId,
+      positionSec,
+      playing,
+    });
+  }
+
+  @Get('by-room/:roomId/live')
+  liveBoardByRoom(
+    @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
+  ) {
+    return this.cohorts.getLiveBoardByRoom(roomId, this.uid(req));
+  }
+
   @Post('by-room/:roomId/video-complete')
   markVideoWatched(
     @Param('roomId') roomId: string,

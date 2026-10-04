@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { Prisma } from '@prisma/client';
 import axios from 'axios';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { Cron } from '@nestjs/schedule';
 import { EmailService } from '../email/email.service';
 
@@ -26,6 +26,8 @@ export interface CreateCohortInput {
   startDate?: string;
   // When re-forming, carry the crew from a finished cohort into this new one.
   reformFromCohortId?: string;
+  visibility?: CohortVisibility;
+  syncMode?: CohortSyncMode;
   sessions?: {
     topic: string;
     description?: string;
@@ -42,7 +44,24 @@ export interface UpdateCohortInput {
   dailyTime?: string;
   startDate?: string;
   surpriseQuiz?: boolean;
+  visibility?: CohortVisibility;
+  syncMode?: CohortSyncMode;
 }
+
+export type CohortVisibility = 'PUBLIC' | 'PRIVATE';
+export type CohortSyncMode = 'SYNC' | 'SOLO';
+
+const asVisibility = (v: unknown): CohortVisibility | null =>
+  v === 'PUBLIC' || v === 'PRIVATE' ? v : null;
+const asSyncMode = (v: unknown): CohortSyncMode | null =>
+  v === 'SYNC' || v === 'SOLO' ? v : null;
+const newInviteCode = () => randomBytes(9).toString('base64url');
+
+// A heartbeat older than this means the member has left the room.
+const PRESENCE_LIVE_MS = 45_000;
+// Gaps longer than this between heartbeats are not counted as study time
+// (tab closed / connection dropped) - the client beats every ~15s.
+const MAX_BEAT_GAP_MS = 60_000;
 
 export interface SetPlanInput {
   sessions?: {
@@ -79,6 +98,8 @@ export class CohortsService {
       sessions,
       reformFromCohortId,
     } = input;
+    const visibility = asVisibility(input.visibility) ?? 'PUBLIC';
+    const syncMode = asSyncMode(input.syncMode) ?? 'SYNC';
     // Small by design: a cohort is a study crew, not a broadcast. Cap at 6 so
     // synced watching + checkpoint discussion actually work (deck's number).
     const cappedMax = Math.min(
@@ -108,6 +129,9 @@ export class CohortsService {
         startMode: startMode ?? null,
         dailyTime: dailyTime ?? null,
         startDate: startMode ? firstStart : null,
+        visibility,
+        syncMode,
+        inviteCode: newInviteCode(),
         members: { create: { userId, progress: {} } },
       },
     });
@@ -149,7 +173,8 @@ export class CohortsService {
           roomId,
           description: `Study room for the "${name.trim()}" cohort`,
           tags: [],
-          visibility: 'PUBLIC',
+          // A private cohort's room stays out of the public room lists too.
+          visibility,
           ownerId: userId,
           startTime: firstStart,
           durationMinutes: 60,
@@ -214,7 +239,20 @@ export class CohortsService {
       dailyTime?: string;
       startDate?: Date;
       surpriseQuiz?: boolean;
+      visibility?: CohortVisibility;
+      syncMode?: CohortSyncMode;
+      inviteCode?: string;
     } = {};
+    const visibility = asVisibility(input.visibility);
+    if (visibility) {
+      data.visibility = visibility;
+      // Older cohorts predate invite codes - mint one when going private.
+      if (visibility === 'PRIVATE' && !cohort.inviteCode) {
+        data.inviteCode = newInviteCode();
+      }
+    }
+    const syncMode = asSyncMode(input.syncMode);
+    if (syncMode) data.syncMode = syncMode;
     if (typeof input.name === 'string' && input.name.trim())
       data.name = input.name.trim();
     if (typeof input.dailyTime === 'string') data.dailyTime = input.dailyTime;
@@ -229,9 +267,14 @@ export class CohortsService {
 
     // Keep the shared room in sync with name / next start time.
     if (cohort.roomId) {
-      const roomData: { name?: string; startTime?: Date } = {};
+      const roomData: {
+        name?: string;
+        startTime?: Date;
+        visibility?: CohortVisibility;
+      } = {};
       if (data.name) roomData.name = data.name;
       if (data.startDate) roomData.startTime = data.startDate;
+      if (data.visibility) roomData.visibility = data.visibility;
       if (Object.keys(roomData).length) {
         await this.prisma.room.update({
           where: { roomId: cohort.roomId },
@@ -285,7 +328,7 @@ export class CohortsService {
           roomId,
           description: `Study room for the "${cohort.name}" cohort`,
           tags: [],
-          visibility: 'PUBLIC',
+          visibility: cohort.visibility === 'PRIVATE' ? 'PRIVATE' : 'PUBLIC',
           ownerId: userId,
           startTime: firstStart,
           durationMinutes: 60,
@@ -752,7 +795,8 @@ export class CohortsService {
     ]);
 
     const cohorts = await this.prisma.cohort.findMany({
-      where: { members: { none: { userId } } },
+      // Private cohorts are invite-only - never recommended to strangers.
+      where: { visibility: 'PUBLIC', members: { none: { userId } } },
       include: {
         playlist: {
           select: { title: true, channelTitle: true, thumbnailUrl: true },
@@ -845,7 +889,7 @@ export class CohortsService {
     });
   }
 
-  async getCohort(cohortId: string, userId: string) {
+  async getCohort(cohortId: string, userId: string, invite?: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
       include: {
@@ -862,19 +906,66 @@ export class CohortsService {
     if (!cohort) throw new NotFoundException('Cohort not found');
 
     const isMember = cohort.members.some((m) => m.userId === userId);
-    return { ...cohort, isMember };
+    if (
+      cohort.visibility === 'PRIVATE' &&
+      !isMember &&
+      !this.inviteMatches(cohort.inviteCode, invite)
+    ) {
+      throw new ForbiddenException(
+        'This cohort is private. Ask a member for the invite link.',
+      );
+    }
+
+    // Members get the invite code (to share the link); older cohorts mint one.
+    let inviteCode: string | null = null;
+    if (isMember) {
+      inviteCode = cohort.inviteCode;
+      if (!inviteCode) {
+        inviteCode = newInviteCode();
+        await this.prisma.cohort.update({
+          where: { id: cohortId },
+          data: { inviteCode },
+        });
+      }
+    }
+    // Presence/time columns feed the live board, not this payload.
+    const members = cohort.members.map((m) => ({
+      id: m.id,
+      cohortId: m.cohortId,
+      userId: m.userId,
+      joinedAt: m.joinedAt,
+      progress: m.progress,
+      user: m.user,
+    }));
+    return { ...cohort, members, inviteCode, isMember };
   }
 
-  async joinCohort(cohortId: string, userId: string) {
+  private inviteMatches(code: string | null, invite?: string) {
+    return Boolean(code && invite && code === invite);
+  }
+
+  async joinCohort(cohortId: string, userId: string, invite?: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
       select: {
         roomId: true,
         maxSize: true,
+        visibility: true,
+        inviteCode: true,
+        members: { where: { userId }, select: { id: true } },
         _count: { select: { members: true } },
       },
     });
     if (!cohort) throw new NotFoundException('Cohort not found');
+    if (
+      cohort.visibility === 'PRIVATE' &&
+      !cohort.members.length &&
+      !this.inviteMatches(cohort.inviteCode, invite)
+    ) {
+      throw new ForbiddenException(
+        'This cohort is private. You need an invite link to join.',
+      );
+    }
     if (cohort._count.members >= cohort.maxSize) {
       throw new BadRequestException('Cohort is full');
     }
@@ -1473,11 +1564,17 @@ export class CohortsService {
   // list with watched marks and let anyone jump to any video. Returns null for
   // non-cohort rooms. `currentVideoId` is the day's suggested starting video.
   async getRoomPlaylist(roomId: string, userId: string) {
-    void userId; // status is cohort-wide (synced for everyone), not per-viewer
     const cohort = await this.prisma.cohort.findFirst({
       where: { roomId },
       include: {
-        members: { select: { progress: true } },
+        members: {
+          select: {
+            userId: true,
+            progress: true,
+            watchingVideoId: true,
+            watchingPositionSec: true,
+          },
+        },
         playlist: {
           include: {
             videos: {
@@ -1497,12 +1594,19 @@ export class CohortsService {
     if (!cohort) return null;
 
     const allVideos = cohort.playlist?.videos ?? [];
+    const solo = cohort.syncMode === 'SOLO';
+    const me = cohort.members.find((m) => m.userId === userId) ?? null;
 
-    // Cohort-wide "done" set — a synced cohort shows the SAME playlist status to
-    // everyone (what the cohort has watched together), not a per-viewer set.
+    // SYNC: one cohort-wide "done" set - everyone sees the SAME playlist status
+    // (what the cohort has watched together). SOLO: each member races through
+    // the playlist on their own, so status + progress are the viewer's own.
     const cohortWatched = new Set<string>();
-    for (const m of cohort.members) {
-      for (const v of this.getWatchedVideos(m.progress)) cohortWatched.add(v);
+    if (solo) {
+      for (const v of this.getWatchedVideos(me?.progress)) cohortWatched.add(v);
+    } else {
+      for (const m of cohort.members) {
+        for (const v of this.getWatchedVideos(m.progress)) cohortWatched.add(v);
+      }
     }
 
     // The cohort's PLAN = the playlist MINUS the skipped set (the authoritative
@@ -1550,6 +1654,16 @@ export class CohortsService {
       hostUserId: cohort.createdById,
       // Whether surprise fastest-finger quizzes are enabled for this cohort.
       surpriseQuiz: cohort.surpriseQuiz,
+      // "SYNC" (shared player) or "SOLO" (everyone at their own pace).
+      syncMode: solo ? 'SOLO' : 'SYNC',
+      // SOLO: the viewer's own resume point (their last heartbeat).
+      myPosition:
+        solo && me?.watchingVideoId
+          ? {
+              videoId: me.watchingVideoId,
+              positionSec: me.watchingPositionSec,
+            }
+          : null,
       // Videos not in the plan (skipped at creation or during a session) — shown
       // as an optional catch-up list, never played on the shared stage.
       skipped,
@@ -2330,7 +2444,7 @@ export class CohortsService {
     if (!videoId) return { ok: false };
     const cohort = await this.prisma.cohort.findFirst({
       where: { roomId },
-      select: { id: true, createdById: true },
+      select: { id: true, createdById: true, syncMode: true },
     });
     if (!cohort) return { ok: false };
     const member = await this.prisma.cohortMember.findUnique({
@@ -2359,7 +2473,9 @@ export class CohortsService {
     // member would silently rewrite everyone's plan and break the "we're all on
     // the same day" discipline. Others still race ahead in their own progress.
     // Best-effort — never blocks the write.
-    if (userId === cohort.createdById) {
+    // Self-paced (SOLO) cohorts keep the plan as a fixed suggested pace - the
+    // whole point is that members spread out, so nobody's speed rewrites it.
+    if (userId === cohort.createdById && cohort.syncMode !== 'SOLO') {
       void this.recomputeScheduleFromProgress(cohort.id).catch(() => undefined);
     }
 
@@ -2574,6 +2690,9 @@ export class CohortsService {
       },
     });
     if (!cohort?.roomId || !cohort.playlist) return { ok: false, skipped: 0 };
+    // The completed/started/skipped classification reads the ONE shared
+    // pointer - meaningless when every member is on their own video.
+    if (cohort.syncMode === 'SOLO') return { ok: true, skipped: 0 };
 
     const videos = cohort.playlist.videos ?? [];
     const indexOf = new Map(videos.map((v, i) => [v.ytVideoId, i]));
@@ -2636,6 +2755,152 @@ export class CohortsService {
       throw new ForbiddenException('Only the host can end the session');
     }
     return this.endCohortSession(cohort.id);
+  }
+
+  // ── Live presence + scoreboard ────────────────────────────────────────────
+
+  // Heartbeat from the cohort room (~every 15s): what this member is watching,
+  // and study time accrued since the previous beat. The server measures the
+  // gap itself (capped), so a client can't claim more time than really passed.
+  async updatePresence(
+    roomId: string,
+    userId: string,
+    data: { videoId?: string | null; positionSec?: number; playing?: boolean },
+  ) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true },
+    });
+    if (!cohort) return { ok: false };
+    const member = await this.prisma.cohortMember.findUnique({
+      where: { cohortId_userId: { cohortId: cohort.id, userId } },
+      select: { presenceAt: true },
+    });
+    if (!member) return { ok: false };
+
+    const now = new Date();
+    const gap = member.presenceAt
+      ? now.getTime() - member.presenceAt.getTime()
+      : 0;
+    const earned =
+      gap > 0 && gap <= MAX_BEAT_GAP_MS ? Math.round(gap / 1000) : 0;
+    const videoId =
+      typeof data.videoId === 'string' && data.videoId
+        ? data.videoId.slice(0, 32)
+        : null;
+
+    await this.prisma.cohortMember.update({
+      where: { cohortId_userId: { cohortId: cohort.id, userId } },
+      data: {
+        presenceAt: now,
+        watchingVideoId: videoId,
+        watchingPositionSec: Math.max(
+          0,
+          Math.round(Number(data.positionSec) || 0),
+        ),
+        watchingPlaying: Boolean(data.playing),
+        ...(earned ? { studySeconds: { increment: earned } } : {}),
+      },
+    });
+    return { ok: true };
+  }
+
+  // The cohort's live scoreboard: per member, time studied in the room, what
+  // they're watching right now (video + position), whether they're live, and
+  // playlist progress. Ranked by study time.
+  async getLiveBoard(cohortId: string, userId: string) {
+    await this.assertMember(cohortId, userId);
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: {
+          include: { user: { select: { id: true, name: true } } },
+        },
+        playlist: {
+          include: {
+            videos: {
+              select: {
+                ytVideoId: true,
+                title: true,
+                position: true,
+                durationSec: true,
+                thumbnailUrl: true,
+              },
+              orderBy: { position: 'asc' },
+            },
+          },
+        },
+      },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+
+    const skipped = new Set(cohort.skippedVideoIds ?? []);
+    const planVideos = (cohort.playlist?.videos ?? []).filter(
+      (v) => !skipped.has(v.ytVideoId),
+    );
+    const allVideos = cohort.playlist?.videos ?? [];
+    const indexOf = new Map(allVideos.map((v, i) => [v.ytVideoId, i]));
+    const planIds = new Set(planVideos.map((v) => v.ytVideoId));
+    const now = Date.now();
+
+    const members = cohort.members.map((m) => {
+      const watched = this.getWatchedVideos(m.progress).filter((v) =>
+        planIds.has(v),
+      );
+      const live = Boolean(
+        m.presenceAt && now - m.presenceAt.getTime() <= PRESENCE_LIVE_MS,
+      );
+      const idx = m.watchingVideoId
+        ? indexOf.get(m.watchingVideoId)
+        : undefined;
+      const video = idx != null ? allVideos[idx] : null;
+      return {
+        userId: m.userId,
+        name: m.user?.name || 'Member',
+        isMe: m.userId === userId,
+        isCreator: m.userId === cohort.createdById,
+        studySeconds: m.studySeconds,
+        live,
+        playing: live && m.watchingPlaying,
+        lastSeenAt: m.presenceAt ? m.presenceAt.toISOString() : null,
+        watching: video
+          ? {
+              videoId: video.ytVideoId,
+              title: video.title,
+              index: (idx ?? 0) + 1,
+              positionSec: m.watchingPositionSec,
+              durationSec: video.durationSec ?? null,
+            }
+          : null,
+        videosWatched: watched.length,
+        percent: planVideos.length
+          ? Math.round((watched.length / planVideos.length) * 100)
+          : 0,
+      };
+    });
+
+    members.sort(
+      (a, b) =>
+        b.studySeconds - a.studySeconds || b.videosWatched - a.videosWatched,
+    );
+
+    return {
+      syncMode: cohort.syncMode === 'SOLO' ? 'SOLO' : 'SYNC',
+      totalVideos: planVideos.length,
+      liveCount: members.filter((m) => m.live).length,
+      members: members.map((m, i) => ({ ...m, rank: i + 1 })),
+      generatedAt: new Date(now).toISOString(),
+    };
+  }
+
+  // Same board, addressed by the cohort's room (used inside the room).
+  async getLiveBoardByRoom(roomId: string, userId: string) {
+    const cohort = await this.prisma.cohort.findFirst({
+      where: { roomId },
+      select: { id: true },
+    });
+    if (!cohort) throw new NotFoundException('Cohort not found');
+    return this.getLiveBoard(cohort.id, userId);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

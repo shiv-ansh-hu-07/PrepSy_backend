@@ -342,6 +342,14 @@ model Cohort {
   // Surprise "fastest-finger" quizzes fire at random (host-driven) during a live
   // session to keep everyone attentive. Creator can turn it off per cohort.
   surpriseQuiz Boolean @default(true)
+  // "PUBLIC" = listed in cohort recommendations, anyone can join.
+  // "PRIVATE" = unlisted; joining needs the invite link (inviteCode).
+  visibility String  @default("PUBLIC")
+  inviteCode String?  @unique
+  // "SYNC" = one shared, synced player (watch together).
+  // "SOLO" = each member watches any video at their own pace; the room shows
+  // who is on which video (a race), and nothing is synced.
+  syncMode   String  @default("SYNC")
 
   playlist     Playlist         @relation(fields: [playlistId], references: [id])
   createdBy    User             @relation("UserCreatedCohorts", fields: [createdById], references: [id])
@@ -359,6 +367,16 @@ model CohortMember {
   userId   String
   joinedAt DateTime @default(now())
   progress Json     @default("{}")
+
+  // Live presence from the cohort room's heartbeat: what this member is
+  // watching right now (also their personal resume point in SOLO cohorts).
+  watchingVideoId     String?
+  watchingPositionSec Int       @default(0)
+  watchingPlaying     Boolean   @default(false)
+  presenceAt          DateTime?
+  // Time spent in the cohort room, accumulated server-side from heartbeats
+  // (wall-clock gap between beats, capped) so it can't be inflated by clients.
+  studySeconds        Int       @default(0)
 
   cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
   user   User   @relation("UserCohorts", fields: [userId], references: [id])
