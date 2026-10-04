@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import {
   Body,
   Controller,
@@ -33,6 +34,8 @@ export class FocusAnalyticsController {
     return this.svc.getSummary(this.uid(req));
   }
 
+  // LLM-backed: tighter limit protects the Groq quota.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('insight')
   insight(@Req() req: RequestWithUser) {
     return this.svc.getInsight(this.uid(req));

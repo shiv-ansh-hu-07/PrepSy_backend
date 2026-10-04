@@ -1,3 +1,4 @@
+import { Throttle } from '@nestjs/throttler';
 import {
   Controller,
   Get,
@@ -19,7 +20,11 @@ import { memoryStorage } from 'multer';
 import { CohortsService } from './cohorts.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import type { RequestWithUser } from '../auth/auth-user.interface';
-import type { CreateCohortInput, UpdateCohortInput, SetPlanInput } from './cohorts.service';
+import type {
+  CreateCohortInput,
+  UpdateCohortInput,
+  SetPlanInput,
+} from './cohorts.service';
 
 @Controller('cohorts')
 @UseGuards(JwtAuthGuard)
@@ -145,6 +150,8 @@ export class CohortsController {
   }
 
   // AI opening question that seeds a day's checkpoint discussion thread.
+  // LLM-backed: tighter limit protects the Groq quota.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Get(':id/sessions/:sessionId/discussion-prompt')
   getDiscussionPrompt(
     @Param('id') id: string,
@@ -168,7 +175,14 @@ export class CohortsController {
     const attachment = attachmentUrl
       ? { url: attachmentUrl, name: attachmentName, type: attachmentType }
       : undefined;
-    return this.cohorts.postDiscussion(id, this.uid(req), content, parentId, studySessionId, attachment);
+    return this.cohorts.postDiscussion(
+      id,
+      this.uid(req),
+      content,
+      parentId,
+      studySessionId,
+      attachment,
+    );
   }
 
   // Upload a discussion attachment (image/document); returns { url, name, type }
@@ -209,7 +223,10 @@ export class CohortsController {
 
   // Full playlist + the caller's watched set, for the in-room Playlist browser.
   @Get('by-room/:roomId/playlist')
-  getRoomPlaylist(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+  getRoomPlaylist(
+    @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
+  ) {
     return this.cohorts.getRoomPlaylist(roomId, this.uid(req));
   }
 
@@ -233,6 +250,8 @@ export class CohortsController {
 
   // Live in-room "pop quiz" for the current video — any member can fire it; the
   // client broadcasts the returned questions to the whole room.
+  // LLM-backed: tighter limit protects the Groq quota.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('by-room/:roomId/pop-quiz')
   popQuiz(
     @Param('roomId') roomId: string,
@@ -240,7 +259,12 @@ export class CohortsController {
     @Body('videoId') videoId?: string,
     @Body('numQuestions') numQuestions?: number,
   ) {
-    return this.cohorts.generatePopQuiz(roomId, this.uid(req), videoId, numQuestions);
+    return this.cohorts.generatePopQuiz(
+      roomId,
+      this.uid(req),
+      videoId,
+      numQuestions,
+    );
   }
 
   @Post(':id/sessions')
@@ -250,7 +274,12 @@ export class CohortsController {
     @Body('topic') topic: string,
     @Body('scheduledAt') scheduledAt: string,
   ) {
-    return this.cohorts.createSession(id, this.uid(req), topic, new Date(scheduledAt));
+    return this.cohorts.createSession(
+      id,
+      this.uid(req),
+      topic,
+      new Date(scheduledAt),
+    );
   }
 
   // Mark a missed day as personally caught up (self-study). Body: { done: boolean }.
@@ -261,11 +290,18 @@ export class CohortsController {
     @Req() req: RequestWithUser,
     @Body('done') done?: boolean,
   ) {
-    return this.cohorts.markCatchup(id, this.uid(req), sessionId, done !== false);
+    return this.cohorts.markCatchup(
+      id,
+      this.uid(req),
+      sessionId,
+      done !== false,
+    );
   }
 
   // ── Quizzes ───────────────────────────────────────────────────────────────
 
+  // LLM-backed: tighter limit protects the Groq quota.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/quiz/generate')
   generateQuiz(
     @Param('id') id: string,
@@ -273,7 +309,12 @@ export class CohortsController {
     @Body('numQuestions') numQuestions?: number,
     @Body('sessionId') sessionId?: string,
   ) {
-    return this.cohorts.generateQuiz(id, this.uid(req), numQuestions, sessionId);
+    return this.cohorts.generateQuiz(
+      id,
+      this.uid(req),
+      numQuestions,
+      sessionId,
+    );
   }
 
   @Post(':id/quiz/attempt')
@@ -284,7 +325,13 @@ export class CohortsController {
     @Body('answers') answers: string[],
     @Body('studySessionId') studySessionId?: string,
   ) {
-    return this.cohorts.submitAttempt(id, this.uid(req), questions, answers, studySessionId);
+    return this.cohorts.submitAttempt(
+      id,
+      this.uid(req),
+      questions,
+      answers,
+      studySessionId,
+    );
   }
 
   @Get(':id/quiz/attempts')
@@ -294,8 +341,8 @@ export class CohortsController {
 
   // Running cohort-wide quiz scoreboard (fastest-finger points).
   @Get(':id/scoreboard')
-  getScoreboard(@Param('id') id: string) {
-    return this.cohorts.getScoreboard(id);
+  getScoreboard(@Param('id') id: string, @Req() req: RequestWithUser) {
+    return this.cohorts.getMemberScoreboard(id, this.uid(req));
   }
 
   // Add a fastest-finger round's points to the caller's running total.
@@ -318,6 +365,8 @@ export class CohortsController {
   }
 
   // Generate a checkpoint quiz for one topic (refused while the topic is locked).
+  // LLM-backed: tighter limit protects the Groq quota.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post(':id/topics/:index/quiz')
   generateTopicQuiz(
     @Param('id') id: string,
@@ -325,7 +374,12 @@ export class CohortsController {
     @Req() req: RequestWithUser,
     @Body('numQuestions') numQuestions?: number,
   ) {
-    return this.cohorts.generateTopicQuiz(id, this.uid(req), Number(index), numQuestions);
+    return this.cohorts.generateTopicQuiz(
+      id,
+      this.uid(req),
+      Number(index),
+      numQuestions,
+    );
   }
 
   // Submit a topic checkpoint attempt (passing unlocks the next topic).
@@ -337,6 +391,12 @@ export class CohortsController {
     @Body('questions') questions: unknown[],
     @Body('answers') answers: string[],
   ) {
-    return this.cohorts.submitTopicAttempt(id, this.uid(req), Number(index), questions, answers);
+    return this.cohorts.submitTopicAttempt(
+      id,
+      this.uid(req),
+      Number(index),
+      questions,
+      answers,
+    );
   }
 }

@@ -8,14 +8,16 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
+const SAFE_INLINE_TYPES =
+  /^(image\/(jpeg|png|gif|webp|avif)|application\/pdf|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|ogg|wav|webm))$/i;
+
 @Injectable()
 export class S3Service {
   private readonly logger = new Logger(S3Service.name);
   private readonly client: S3Client;
   private readonly bucket = process.env.S3_BUCKET_NAME;
   private readonly cloudfrontDomain = process.env.CLOUDFRONT_DOMAIN;
-  private readonly region =
-    process.env.S3_REGION || process.env.AWS_REGION;
+  private readonly region = process.env.S3_REGION || process.env.AWS_REGION;
 
   constructor() {
     // Credentials are resolved from the ECS/EC2 task IAM role via the default
@@ -38,7 +40,8 @@ export class S3Service {
       throw new InternalServerErrorException('File storage is not configured');
     }
 
-    const ext = extname(originalName).toLowerCase() || '.jpg';
+    const rawExt = extname(originalName).toLowerCase();
+    const ext = /^\.(jpe?g|png|gif|webp)$/.test(rawExt) ? rawExt : '.jpg';
     const key = `avatars/${userId}/${uuidv4()}${ext}`;
 
     try {
@@ -80,15 +83,21 @@ export class S3Service {
     }
 
     const ext = extname(originalName).toLowerCase();
-    const key = `chat/${userId}/${uuidv4()}${ext}`;
+    const safeExt = /^\.[a-z0-9]{1,10}$/.test(ext) ? ext : '';
+    const key = `chat/${userId}/${uuidv4()}${safeExt}`;
 
+    // The client picks the mimetype, and these files are served publicly from
+    // our CDN. Only render known-safe types inline; anything else (HTML, SVG,
+    // XML, JS, ...) is served as a download so it can't run as a web page.
+    const inline = SAFE_INLINE_TYPES.test(mimetype || '');
     try {
       await this.client.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: key,
           Body: buffer,
-          ContentType: mimetype || 'application/octet-stream',
+          ContentType: inline ? mimetype : 'application/octet-stream',
+          ContentDisposition: inline ? undefined : 'attachment',
           CacheControl: 'public, max-age=31536000, immutable',
         }),
       );

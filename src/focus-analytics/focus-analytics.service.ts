@@ -35,7 +35,11 @@ export class FocusAnalyticsService {
         userId,
         roomId: dto.roomId,
         roomName: dto.roomName ?? null,
-        durationMinutes: Math.max(0, Math.round(dto.durationMinutes)),
+        // Client-reported; bound it to a plausible single session (<= 24h).
+        durationMinutes: Math.min(
+          24 * 60,
+          Math.max(0, Math.round(Number(dto.durationMinutes) || 0)),
+        ),
         focusScore: clamp(dto.focusScore),
         engagementScore: clamp(dto.engagementScore),
         distractionCount: Math.max(0, dto.distractionCount),
@@ -48,7 +52,10 @@ export class FocusAnalyticsService {
         phonePercent: clamp(dto.phonePercent ?? 0),
         drowsinessPercent: clamp(dto.drowsinessPercent ?? 0),
         lookAwayPercent: clamp(dto.lookAwayPercent ?? 0),
-        longestFocusStreakSec: Math.max(0, Math.round(dto.longestFocusStreakSec ?? 0)),
+        longestFocusStreakSec: Math.max(
+          0,
+          Math.round(dto.longestFocusStreakSec ?? 0),
+        ),
       },
     });
   }
@@ -156,7 +163,8 @@ export class FocusAnalyticsService {
       return { empty: false, ...data };
     } catch (err) {
       const detail =
-        axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
+        axios.isAxiosError(err) &&
+        typeof err.response?.data?.detail === 'string'
           ? err.response.data.detail
           : err instanceof Error
             ? err.message

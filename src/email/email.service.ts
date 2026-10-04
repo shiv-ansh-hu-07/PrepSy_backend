@@ -2,6 +2,21 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Resend } from 'resend';
 import { PrismaService } from '../prisma/prisma.service';
 
+// User/creator-controlled text (names, room/cohort titles, YouTube topics)
+// goes into HTML emails sent to OTHER people — escape it so nobody can inject
+// links/markup into someone else's inbox.
+function escapeHtml(value: unknown): string {
+  const text =
+    typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  return text.replace(
+    /[<>&"']/g,
+    (c) =>
+      ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' })[
+        c
+      ] as string,
+  );
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -13,7 +28,10 @@ export class EmailService {
   constructor(private readonly prisma: PrismaService) {}
 
   private getFrontendUrl() {
-    return (process.env.FRONTEND_URL || 'https://prepsy.in').replace(/\/+$/, '');
+    return (process.env.FRONTEND_URL || 'https://prepsy.in').replace(
+      /\/+$/,
+      '',
+    );
   }
 
   // A user can opt out of reminder-type emails from their profile. Transactional
@@ -100,7 +118,10 @@ export class EmailService {
     const to =
       process.env.CONTACT_EMAIL?.trim() || 'shivanshu0503tiwari@gmail.com';
     const esc = (s: string) =>
-      String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string);
+      String(s).replace(
+        /[<>&]/g,
+        (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string,
+      );
     const subject = data.subject?.trim() || 'New message';
 
     return this.sendEmail({
@@ -146,7 +167,7 @@ export class EmailService {
       to,
       subject: `Your classroom "${roomName}" is scheduled`,
       html: `
-        <h2>${roomName}</h2>
+        <h2>${escapeHtml(roomName)}</h2>
         <p>Your classroom has been scheduled successfully.</p>
         <p>Starts at: ${formattedStart}</p>
         ${durationLine}
@@ -176,13 +197,13 @@ export class EmailService {
 
     const name = data.name?.trim() || 'there';
     const topicLine = data.topic
-      ? `<p style="color:#2f3b63;font-size:16px;font-weight:600;margin:0 0 6px">Today: ${data.topic}</p>`
+      ? `<p style="color:#2f3b63;font-size:16px;font-weight:600;margin:0 0 6px">Today: ${escapeHtml(data.topic)}</p>`
       : '';
     const startLine = data.startLabel
-      ? `<p style="color:#6b78a0;font-size:14px;margin:0 0 18px">Starts ${data.startLabel}</p>`
+      ? `<p style="color:#6b78a0;font-size:14px;margin:0 0 18px">Starts ${escapeHtml(data.startLabel)}</p>`
       : '';
     const goalPart = data.goalLabel
-      ? ` <span style="color:#9aa4c7">/ goal ${data.goalLabel}</span>`
+      ? ` <span style="color:#9aa4c7">/ goal ${escapeHtml(data.goalLabel)}</span>`
       : '';
     const streakRisk =
       data.streakDays > 0
@@ -196,8 +217,8 @@ export class EmailService {
         : `Time to study — ${data.roomName}`,
       html: `
         <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
-          <h2 style="color:#2f3b63;margin:0 0 6px">Time to study, ${name} 👋</h2>
-          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${data.roomName}</strong> is ready for you.</p>
+          <h2 style="color:#2f3b63;margin:0 0 6px">Time to study, ${escapeHtml(name)} 👋</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.roomName)}</strong> is ready for you.</p>
           ${startLine}
           ${topicLine}
 
@@ -256,7 +277,7 @@ export class EmailService {
 
     const socialLine =
       done.length > 0
-        ? `<strong>${nameList(done)}</strong> already studied today. You're one of the few who hasn't yet.`
+        ? `<strong>${escapeHtml(nameList(done))}</strong> already studied today. You're one of the few who hasn't yet.`
         : `Nobody in your crew has studied yet today — be the one who gets everyone going.`;
 
     const streakLine =
@@ -286,8 +307,8 @@ export class EmailService {
       subject,
       html: `
         <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
-          <h2 style="color:#2f3b63;margin:0 0 6px">Your crew is missing you, ${name} 👀</h2>
-          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${data.cohortName}</strong> · today: ${data.topic}</p>
+          <h2 style="color:#2f3b63;margin:0 0 6px">Your crew is missing you, ${escapeHtml(name)} 👀</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.cohortName)}</strong> · today: ${escapeHtml(data.topic)}</p>
 
           <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:18px 20px;margin:16px 0">
             <p style="color:#4a5a85;font-size:15px;line-height:1.6;margin:0 0 10px">${socialLine}</p>
@@ -334,8 +355,8 @@ export class EmailService {
       subject: `You're missing "${data.topic}" — your crew already started`,
       html: `
         <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
-          <h2 style="color:#2f3b63;margin:0 0 6px">Your session already started, ${name} ⏰</h2>
-          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${data.cohortName}</strong> · today: ${data.topic}</p>
+          <h2 style="color:#2f3b63;margin:0 0 6px">Your session already started, ${escapeHtml(name)} ⏰</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.cohortName)}</strong> · today: ${escapeHtml(data.topic)}</p>
           <p style="color:#6b78a0;font-size:13px;margin:0 0 16px">It kicked off about 10 minutes ago and you're not in yet.</p>
 
           <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 18px;margin:0 0 22px">
@@ -365,8 +386,8 @@ export class EmailService {
       subject: `Today in "${cohortName}": ${topic}`,
       html: `
         <h2>Today's session</h2>
-        <p><strong>${topic}</strong></p>
-        <p>Your "${cohortName}" study room is ready — join your cohort and study together.</p>
+        <p><strong>${escapeHtml(topic)}</strong></p>
+        <p>Your "${escapeHtml(cohortName)}" study room is ready — join your cohort and study together.</p>
         <p><a href="${joinUrl}" style="background:#7c3aed;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Join the room</a></p>
         ${this.unsubscribeFooter()}
       `,
@@ -385,7 +406,7 @@ export class EmailService {
       to,
       subject: 'Your study room starts in 15 minutes',
       html: `
-        <h2>${roomName}</h2>
+        <h2>${escapeHtml(roomName)}</h2>
         <p>Your study session starts at ${this.formatSchedule(startTime, timeZone)}</p>
         <p>Join now and stay consistent.</p>
         ${this.unsubscribeFooter()}
@@ -400,7 +421,7 @@ export class EmailService {
       to,
       subject: `${joinedCount} students already studying`,
       html: `
-        <h2>${roomName}</h2>
+        <h2>${escapeHtml(roomName)}</h2>
         <p>${joinedCount} students are already studying.</p>
         <p>Join now and do not fall behind.</p>
         ${this.unsubscribeFooter()}
@@ -416,7 +437,7 @@ export class EmailService {
       subject: `Your ${streakDays}-day streak dies tonight 🔥`,
       html: `
         <div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fafafa;border-radius:16px">
-          <h2 style="color:#2f3b63;margin:0 0 12px">Hey ${name || 'there'} 👋</h2>
+          <h2 style="color:#2f3b63;margin:0 0 12px">Hey ${escapeHtml(name || 'there')} 👋</h2>
           <p style="color:#4a5a85;font-size:16px;line-height:1.6;margin:0 0 20px">
             You've built a <strong>${streakDays}-day study streak</strong> on PrepSy — that's real consistency. But you haven't studied yet today.
           </p>
@@ -460,7 +481,7 @@ export class EmailService {
       html: `
         <div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#fafafa;border-radius:16px">
           <h2 style="color:#2f3b63;margin:0 0 6px">This week on PrepSy</h2>
-          <p style="color:#6b78a0;margin:0 0 24px;font-size:14px">Weekly summary for ${name || 'you'}</p>
+          <p style="color:#6b78a0;margin:0 0 24px;font-size:14px">Weekly summary for ${escapeHtml(name || 'you')}</p>
           <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:20px 24px;margin:0 0 20px">
             <p style="color:#4a5a85;margin:0 0 8px">⏱ Total study time: <strong>${report.totalLabel}</strong></p>
             <p style="color:#4a5a85;margin:0 0 8px">✅ Sessions completed: <strong>${report.sessionsCompleted}</strong></p>

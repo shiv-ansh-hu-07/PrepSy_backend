@@ -65,9 +65,15 @@ export class AuthService {
     return shifted.toISOString().slice(0, 10);
   }
 
-
+  // Case-insensitive so "A@x.com" and "a@x.com" are one account (older rows
+  // may have been stored with mixed case).
   private async findUserByEmail(email: string): Promise<AuthUserRecord | null> {
-    return this.findUserWithProfile({ where: { email } });
+    const clean = (email || '').trim();
+    if (!clean) return null;
+    return this.findUserWithProfile({
+      where: { email: { equals: clean, mode: 'insensitive' } },
+      multiple: true,
+    });
   }
 
   private async findUserById(userId: string): Promise<AuthUserRecord | null> {
@@ -82,7 +88,7 @@ export class AuthService {
       where: {
         OR: [
           { provider, providerId: profile.providerId },
-          { email: profile.email },
+          { email: { equals: profile.email.trim(), mode: 'insensitive' } },
         ],
       },
       multiple: true,
@@ -97,7 +103,9 @@ export class AuthService {
     multiple?: boolean;
   }): Promise<AuthUserRecord | null> {
     const { where, multiple } = options;
-    const include = { profile: { select: { avatarUrl: true, hasSeenTour: true } } } as const;
+    const include = {
+      profile: { select: { avatarUrl: true, hasSeenTour: true } },
+    } as const;
 
     try {
       return multiple
@@ -120,105 +128,110 @@ export class AuthService {
     }
   }
 
-private isProfileStorageUnavailable(error: unknown) {
-  return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    ['P2021', 'P2022'].includes(error.code)
-  );
-}
+  private isProfileStorageUnavailable(error: unknown) {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      ['P2021', 'P2022'].includes(error.code)
+    );
+  }
 
   // Returns 0 if the last completed session was 2+ days ago (streak expired).
-  private getEffectiveStreak(user: { loginStreak: number; lastLoginAt: Date | null }): number {
+  private getEffectiveStreak(user: {
+    loginStreak: number;
+    lastLoginAt: Date | null;
+  }): number {
     if (!user.lastLoginAt) return 0;
     const now = new Date();
     const todayKey = this.getDateKeyInTimeZone(now);
     const yesterdayKey = this.shiftDateKey(todayKey, -1);
     const lastKey = this.getDateKeyInTimeZone(user.lastLoginAt);
-    return lastKey === todayKey || lastKey === yesterdayKey ? user.loginStreak : 0;
-}
-
-private async recordDailyLogin(
-  user: AuthUserRecord,
-): Promise<AuthUserRecord> {
-  if (user.streakDisabled) {
-    return user;
+    return lastKey === todayKey || lastKey === yesterdayKey
+      ? user.loginStreak
+      : 0;
   }
 
-  const now = new Date();
-  const todayKey = this.getDateKeyInTimeZone(now);
-  const lastLoginKey = user.lastLoginAt
-    ? this.getDateKeyInTimeZone(user.lastLoginAt)
-    : null;
+  private async recordDailyLogin(
+    user: AuthUserRecord,
+  ): Promise<AuthUserRecord> {
+    if (user.streakDisabled) {
+      return user;
+    }
 
-  if (lastLoginKey === todayKey) {
-    return user;
+    const now = new Date();
+    const todayKey = this.getDateKeyInTimeZone(now);
+    const lastLoginKey = user.lastLoginAt
+      ? this.getDateKeyInTimeZone(user.lastLoginAt)
+      : null;
+
+    if (lastLoginKey === todayKey) {
+      return user;
+    }
+
+    const yesterdayKey = this.shiftDateKey(todayKey, -1);
+    const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        loginStreak: nextStreak,
+        lastLoginAt: now,
+      },
+    });
   }
 
-  const yesterdayKey = this.shiftDateKey(todayKey, -1);
-  const nextStreak = lastLoginKey === yesterdayKey ? user.loginStreak + 1 : 1;
+  private async applyGuestStreakDisable(
+    user: AuthUserRecord,
+    disableStreak?: boolean,
+  ) {
+    if (!disableStreak || user.streakDisabled) {
+      return user;
+    }
 
-  return this.prisma.user.update({
-    where: { id: user.id },
-    data: {
-      loginStreak: nextStreak,
-      lastLoginAt: now,
-    },
-  });
-}
-
-private async applyGuestStreakDisable(
-  user: AuthUserRecord,
-  disableStreak?: boolean,
-) {
-  if (!disableStreak || user.streakDisabled) {
-    return user;
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        streakDisabled: true,
+        loginStreak: 0,
+        lastLoginAt: null,
+      },
+    });
   }
 
-  return this.prisma.user.update({
-    where: { id: user.id },
-    data: {
-      streakDisabled: true,
-      loginStreak: 0,
-      lastLoginAt: null,
-    },
-  });
-}
+  private async createLocalUser(
+    email: string,
+    hashedPassword: string,
+    name?: string,
+  ) {
+    return this.prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        name: name ?? '',
+        provider: 'local',
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+      },
+    });
+  }
 
-private async createLocalUser(
-  email: string,
-  hashedPassword: string,
-  name?: string,
-) {
-  return this.prisma.user.create({
-    data: {
-      email,
-      password: hashedPassword,
-      name: name ?? '',
-      provider: 'local',
-    },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-    },
-  });
-}
-
-private async createOauthUser(
-  provider: 'google',
-  profile: { email: string; providerId: string; name?: string },
-): Promise<AuthUserRecord> {
-  const user = await this.prisma.user.create({
-    data: {
-      email: profile.email,
-      name: profile.name ?? '',
-      provider,
-      providerId: profile.providerId,
-      password: null,
-    },
-  });
-  return { ...user, profile: null };
-}
+  private async createOauthUser(
+    provider: 'google',
+    profile: { email: string; providerId: string; name?: string },
+  ): Promise<AuthUserRecord> {
+    const user = await this.prisma.user.create({
+      data: {
+        email: profile.email,
+        name: profile.name ?? '',
+        provider,
+        providerId: profile.providerId,
+        password: null,
+      },
+    });
+    return { ...user, profile: null };
+  }
 
   // =========================
   // HELPER: SIGN JWT (STANDARD)
@@ -234,6 +247,19 @@ private async createOauthUser(
   // REGISTER (EMAIL/PASSWORD)
   // =========================
   async register(email: string, password: string, name?: string) {
+    email = (typeof email === 'string' ? email : '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+      throw new BadRequestException('Please enter a valid email address');
+    }
+    // bcrypt only uses the first 72 bytes, so cap there rather than silently truncate.
+    if (
+      typeof password !== 'string' ||
+      password.length < 8 ||
+      Buffer.byteLength(password) > 72
+    ) {
+      throw new BadRequestException('Password must be 8-72 characters');
+    }
+    name = typeof name === 'string' ? name.trim().slice(0, 80) : undefined;
     const exists = await this.findUserByEmail(email);
     if (exists) throw new BadRequestException('User already exists');
 
@@ -256,6 +282,9 @@ private async createOauthUser(
   // =========================
   async login(email: string, password: string, disableStreak = false) {
     void disableStreak;
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      throw new UnauthorizedException('Invalid email or password');
+    }
     const existingUser = await this.findUserByEmail(email);
     if (!existingUser || !existingUser.password) {
       throw new UnauthorizedException('Invalid email or password');
@@ -281,31 +310,29 @@ private async createOauthUser(
     };
   }
 
-
-
   // =========================
   // CURRENT USER
   // =========================
   async me(userId: string) {
-  if (!userId) {
-    throw new UnauthorizedException('Invalid token');
+    if (!userId) {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    const existingUser = await this.findUserById(userId);
+
+    if (!existingUser) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    return {
+      id: existingUser.id,
+      email: existingUser.email,
+      name: existingUser.name,
+      attendanceStreak: this.getEffectiveStreak(existingUser),
+      avatarUrl: existingUser.profile?.avatarUrl || null,
+      hasSeenTour: existingUser.profile?.hasSeenTour ?? false,
+    };
   }
-
-  const existingUser = await this.findUserById(userId);
-
-  if (!existingUser) {
-    throw new UnauthorizedException('User not found');
-  }
-
-  return {
-    id: existingUser.id,
-    email: existingUser.email,
-    name: existingUser.name,
-    attendanceStreak: this.getEffectiveStreak(existingUser),
-    avatarUrl: existingUser.profile?.avatarUrl || null,
-    hasSeenTour: existingUser.profile?.hasSeenTour ?? false,
-  };
-}
 
   // =========================
   // GOOGLE OAUTH LOGIN

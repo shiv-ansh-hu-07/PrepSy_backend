@@ -40,8 +40,21 @@ export class AnalyticsService {
       anonId: e.anonId ? String(e.anonId).slice(0, 64) : null,
       sessionId: e.sessionId ? String(e.sessionId).slice(0, 64) : null,
       path: e.path ? String(e.path).slice(0, 300) : null,
-      props: (e.props ?? {}) as Prisma.InputJsonValue,
+      props: this.boundedProps(e.props),
     };
+  }
+
+  // Anonymous callers can post events, so keep each props blob small — enough
+  // for real event metadata, not enough to bloat the table.
+  private boundedProps(props: unknown): Prisma.InputJsonValue {
+    if (!props || typeof props !== 'object') return {};
+    try {
+      return JSON.stringify(props).length <= 2000
+        ? (props as Prisma.InputJsonValue)
+        : { truncated: true };
+    } catch {
+      return {};
+    }
   }
 
   /** Founder-facing snapshot: active users, signups, sessions, basic retention. */

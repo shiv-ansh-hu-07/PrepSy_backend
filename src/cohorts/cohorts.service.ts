@@ -69,12 +69,26 @@ export class CohortsService {
   // ── Cohorts ───────────────────────────────────────────────────────────────
 
   async createCohort(userId: string, input: CreateCohortInput) {
-    const { playlistId, name, maxSize, startMode, dailyTime, startDate, sessions, reformFromCohortId } = input;
+    const {
+      playlistId,
+      name,
+      maxSize,
+      startMode,
+      dailyTime,
+      startDate,
+      sessions,
+      reformFromCohortId,
+    } = input;
     // Small by design: a cohort is a study crew, not a broadcast. Cap at 6 so
     // synced watching + checkpoint discussion actually work (deck's number).
-    const cappedMax = Math.min(Math.max(2, maxSize ?? COHORT_MAX_SIZE), COHORT_MAX_SIZE);
+    const cappedMax = Math.min(
+      Math.max(2, maxSize ?? COHORT_MAX_SIZE),
+      COHORT_MAX_SIZE,
+    );
 
-    const playlist = await this.prisma.playlist.findUnique({ where: { id: playlistId } });
+    const playlist = await this.prisma.playlist.findUnique({
+      where: { id: playlistId },
+    });
     if (!playlist) throw new NotFoundException('Playlist not found');
     if (!name?.trim()) throw new BadRequestException('Cohort name is required');
 
@@ -113,7 +127,11 @@ export class CohortsService {
           .slice(0, Math.max(0, cappedMax - 1));
         if (reformCrew.length) {
           await this.prisma.cohortMember.createMany({
-            data: reformCrew.map((uid) => ({ cohortId: cohort.id, userId: uid, progress: {} })),
+            data: reformCrew.map((uid) => ({
+              cohortId: cohort.id,
+              userId: uid,
+              progress: {},
+            })),
             skipDuplicates: true,
           });
         }
@@ -146,7 +164,10 @@ export class CohortsService {
           skipDuplicates: true,
         });
       }
-      await this.prisma.cohort.update({ where: { id: cohort.id }, data: { roomId } });
+      await this.prisma.cohort.update({
+        where: { id: cohort.id },
+        data: { roomId },
+      });
 
       const dayList = Array.isArray(sessions) ? sessions : [];
       if (dayList.length) {
@@ -173,8 +194,14 @@ export class CohortsService {
     return this.getCohort(cohort.id, userId);
   }
 
-  async updateCohort(cohortId: string, userId: string, input: UpdateCohortInput) {
-    const cohort = await this.prisma.cohort.findUnique({ where: { id: cohortId } });
+  async updateCohort(
+    cohortId: string,
+    userId: string,
+    input: UpdateCohortInput,
+  ) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+    });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort.createdById !== userId) {
       throw new ForbiddenException('Only the creator can edit this cohort');
@@ -186,9 +213,11 @@ export class CohortsService {
       startDate?: Date;
       surpriseQuiz?: boolean;
     } = {};
-    if (typeof input.name === 'string' && input.name.trim()) data.name = input.name.trim();
+    if (typeof input.name === 'string' && input.name.trim())
+      data.name = input.name.trim();
     if (typeof input.dailyTime === 'string') data.dailyTime = input.dailyTime;
-    if (typeof input.surpriseQuiz === 'boolean') data.surpriseQuiz = input.surpriseQuiz;
+    if (typeof input.surpriseQuiz === 'boolean')
+      data.surpriseQuiz = input.surpriseQuiz;
     if (input.startDate) {
       const d = new Date(input.startDate);
       if (!Number.isNaN(d.getTime())) data.startDate = d;
@@ -202,7 +231,10 @@ export class CohortsService {
       if (data.name) roomData.name = data.name;
       if (data.startDate) roomData.startTime = data.startDate;
       if (Object.keys(roomData).length) {
-        await this.prisma.room.update({ where: { roomId: cohort.roomId }, data: roomData });
+        await this.prisma.room.update({
+          where: { roomId: cohort.roomId },
+          data: roomData,
+        });
       }
     }
 
@@ -305,7 +337,9 @@ export class CohortsService {
   private async syncCreationSkipped(cohortId: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
-      include: { playlist: { include: { videos: { select: { ytVideoId: true } } } } },
+      include: {
+        playlist: { include: { videos: { select: { ytVideoId: true } } } },
+      },
     });
     if (!cohort?.playlist) return;
     const sessions = await this.prisma.studySession.findMany({
@@ -368,7 +402,9 @@ export class CohortsService {
         cohort: {
           include: {
             members: {
-              include: { user: { select: { id: true, name: true, email: true } } },
+              include: {
+                user: { select: { id: true, name: true, email: true } },
+              },
             },
           },
         },
@@ -379,7 +415,9 @@ export class CohortsService {
     const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
     const memberIds = Array.from(
       new Set(
-        sessions.flatMap((s) => s.cohort.members.map((m) => m.userId).filter(Boolean)),
+        sessions.flatMap((s) =>
+          s.cohort.members.map((m) => m.userId).filter(Boolean),
+        ),
       ),
     );
     const statsById = await this.computeReminderStats(memberIds);
@@ -423,7 +461,10 @@ export class CohortsService {
           streakDays: st.streakDays,
           weekLabel: this.formatMins(st.weekMinutes),
           sessionsThisWeek: st.weekSessions,
-          goalLabel: st.goalMinutes > 0 ? `${this.formatMins(st.goalMinutes)}/day` : null,
+          goalLabel:
+            st.goalMinutes > 0
+              ? `${this.formatMins(st.goalMinutes)}/day`
+              : null,
         });
       }
     }
@@ -448,7 +489,9 @@ export class CohortsService {
         cohort: {
           include: {
             members: {
-              include: { user: { select: { id: true, name: true, email: true } } },
+              include: {
+                user: { select: { id: true, name: true, email: true } },
+              },
             },
           },
         },
@@ -459,7 +502,9 @@ export class CohortsService {
     const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
     const memberIds = Array.from(
       new Set(
-        sessions.flatMap((s) => s.cohort.members.map((m) => m.userId).filter(Boolean)),
+        sessions.flatMap((s) =>
+          s.cohort.members.map((m) => m.userId).filter(Boolean),
+        ),
       ),
     );
     const statsById = await this.computeReminderStats(memberIds);
@@ -647,8 +692,10 @@ export class CohortsService {
     const lapsed = new Set<string>();
     for (const session of sessions) {
       const vids = session.videoIds ?? [];
-      const watchedUnion = watchedByCohort.get(session.cohortId) ?? new Set<string>();
-      const finishedContent = vids.length > 0 && vids.every((v) => watchedUnion.has(v));
+      const watchedUnion =
+        watchedByCohort.get(session.cohortId) ?? new Set<string>();
+      const finishedContent =
+        vids.length > 0 && vids.every((v) => watchedUnion.has(v));
 
       // Only sessions with no videos fall back to attendance (legacy/empty days).
       let attended = 0;
@@ -692,7 +739,9 @@ export class CohortsService {
       select: { goals: true, interests: true, examTargets: true, skills: true },
     });
     const words = (arr?: string[] | null) =>
-      (arr ?? []).flatMap((s) => s.toLowerCase().split(/[^a-z0-9]+/)).filter((w) => w.length >= 3);
+      (arr ?? [])
+        .flatMap((s) => s.toLowerCase().split(/[^a-z0-9]+/))
+        .filter((w) => w.length >= 3);
     const tokens = new Set([
       ...words(profile?.goals),
       ...words(profile?.interests),
@@ -703,7 +752,9 @@ export class CohortsService {
     const cohorts = await this.prisma.cohort.findMany({
       where: { members: { none: { userId } } },
       include: {
-        playlist: { select: { title: true, channelTitle: true, thumbnailUrl: true } },
+        playlist: {
+          select: { title: true, channelTitle: true, thumbnailUrl: true },
+        },
         _count: { select: { members: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -730,7 +781,8 @@ export class CohortsService {
         const daysToStart = forming ? (startMs! - now) / DAY : null;
         // Rank: interest match > about-to-start > has social proof. Soonest
         // upcoming starts float up (join before it kicks off).
-        const soonBoost = daysToStart != null ? Math.max(0, 6 - daysToStart) : 0;
+        const soonBoost =
+          daysToStart != null ? Math.max(0, 6 - daysToStart) : 0;
         const score =
           matched * 6 + (forming ? 4 : 0) + soonBoost + Math.min(members, 4);
         return {
@@ -777,7 +829,14 @@ export class CohortsService {
     return this.prisma.cohort.findMany({
       where: { members: { some: { userId } } },
       include: {
-        playlist: { select: { id: true, title: true, thumbnailUrl: true, channelTitle: true } },
+        playlist: {
+          select: {
+            id: true,
+            title: true,
+            thumbnailUrl: true,
+            channelTitle: true,
+          },
+        },
         _count: { select: { members: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -788,7 +847,9 @@ export class CohortsService {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
       include: {
-        playlist: { include: { plan: true, videos: { orderBy: { position: 'asc' } } } },
+        playlist: {
+          include: { plan: true, videos: { orderBy: { position: 'asc' } } },
+        },
         members: {
           include: { user: { select: { id: true, name: true } } },
           orderBy: { joinedAt: 'asc' },
@@ -805,7 +866,11 @@ export class CohortsService {
   async joinCohort(cohortId: string, userId: string) {
     const cohort = await this.prisma.cohort.findUnique({
       where: { id: cohortId },
-      select: { roomId: true, maxSize: true, _count: { select: { members: true } } },
+      select: {
+        roomId: true,
+        maxSize: true,
+        _count: { select: { members: true } },
+      },
     });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort._count.members >= cohort.maxSize) {
@@ -834,10 +899,14 @@ export class CohortsService {
   }
 
   async leaveCohort(cohortId: string, userId: string) {
-    const cohort = await this.prisma.cohort.findUnique({ where: { id: cohortId } });
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+    });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort.createdById === userId) {
-      throw new BadRequestException('Creator cannot leave; delete the cohort instead');
+      throw new BadRequestException(
+        'Creator cannot leave; delete the cohort instead',
+      );
     }
 
     await this.prisma.cohortMember.deleteMany({ where: { cohortId, userId } });
@@ -845,7 +914,9 @@ export class CohortsService {
   }
 
   async deleteCohort(cohortId: string, userId: string) {
-    const cohort = await this.prisma.cohort.findUnique({ where: { id: cohortId } });
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+    });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort.createdById !== userId) {
       throw new ForbiddenException('Only the creator can delete this cohort');
@@ -875,10 +946,18 @@ export class CohortsService {
 
   // studySessionId scopes the thread list: a specific id returns that checkpoint's
   // threads; omitted (null) returns the general cohort board, keeping them separate.
-  async getDiscussions(cohortId: string, userId: string, studySessionId?: string) {
+  async getDiscussions(
+    cohortId: string,
+    userId: string,
+    studySessionId?: string,
+  ) {
     await this.assertMember(cohortId, userId);
     return this.prisma.discussionPost.findMany({
-      where: { cohortId, parentId: null, studySessionId: studySessionId ?? null },
+      where: {
+        cohortId,
+        parentId: null,
+        studySessionId: studySessionId ?? null,
+      },
       include: {
         author: { select: { id: true, name: true } },
         replies: {
@@ -894,11 +973,20 @@ export class CohortsService {
   // empty thread isn't a dead end. Generated once via the AI service and cached
   // on the StudySession; returns { question, followups }. Falls back to an empty
   // question (the client shows static starters) if the AI is unavailable.
-  async getDiscussionPrompt(cohortId: string, userId: string, sessionId: string) {
+  async getDiscussionPrompt(
+    cohortId: string,
+    userId: string,
+    sessionId: string,
+  ) {
     await this.assertMember(cohortId, userId);
     const session = await this.prisma.studySession.findFirst({
       where: { id: sessionId, cohortId },
-      select: { id: true, topic: true, description: true, discussionPrompt: true },
+      select: {
+        id: true,
+        topic: true,
+        description: true,
+        discussionPrompt: true,
+      },
     });
     if (!session) throw new NotFoundException('Session not found');
 
@@ -935,12 +1023,17 @@ export class CohortsService {
       const result = {
         question: typeof data?.question === 'string' ? data.question : '',
         followups: Array.isArray(data?.followups)
-          ? (data.followups as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 3)
+          ? (data.followups as unknown[])
+              .filter((x): x is string => typeof x === 'string')
+              .slice(0, 3)
           : [],
       };
       if (result.question) {
         await this.prisma.studySession
-          .update({ where: { id: session.id }, data: { discussionPrompt: JSON.stringify(result) } })
+          .update({
+            where: { id: session.id },
+            data: { discussionPrompt: JSON.stringify(result) },
+          })
           .catch(() => undefined);
       }
       return result;
@@ -962,6 +1055,22 @@ export class CohortsService {
     if (!content?.trim() && !attachment?.url) {
       throw new BadRequestException('Write something or attach a file.');
     }
+    // A reply must stay inside this cohort (else it would surface under
+    // another cohort's thread via the replies relation).
+    if (parentId) {
+      const parent = await this.prisma.discussionPost.findUnique({
+        where: { id: parentId },
+        select: { cohortId: true },
+      });
+      if (!parent || parent.cohortId !== cohortId) {
+        throw new BadRequestException('Invalid reply target.');
+      }
+    }
+    // Attachments must be files we uploaded (see uploadDiscussionMedia), not
+    // arbitrary links dressed up as attachments.
+    if (attachment?.url && !this.isOwnStorageUrl(attachment.url)) {
+      throw new BadRequestException('Invalid attachment.');
+    }
     return this.prisma.discussionPost.create({
       data: {
         cohortId,
@@ -970,8 +1079,12 @@ export class CohortsService {
         parentId: parentId ?? null,
         studySessionId: studySessionId ?? null,
         attachmentUrl: attachment?.url ?? null,
-        attachmentName: attachment?.name ?? null,
-        attachmentType: attachment?.type ?? null,
+        attachmentName: attachment?.name
+          ? String(attachment.name).slice(0, 200)
+          : null,
+        attachmentType: attachment?.type
+          ? String(attachment.type).slice(0, 100)
+          : null,
       },
       include: { author: { select: { id: true, name: true } } },
     });
@@ -1012,7 +1125,12 @@ export class CohortsService {
           playlist: {
             include: {
               videos: {
-                select: { ytVideoId: true, title: true, thumbnailUrl: true, position: true },
+                select: {
+                  ytVideoId: true,
+                  title: true,
+                  thumbnailUrl: true,
+                  position: true,
+                },
                 orderBy: { position: 'asc' },
               },
             },
@@ -1030,7 +1148,9 @@ export class CohortsService {
     const visible = sessions.filter((s) => s.status !== 'POSTPONED');
 
     const roomIds = [
-      ...new Set(visible.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
+      ...new Set(
+        visible.map((s) => s.roomId).filter((r): r is string => Boolean(r)),
+      ),
     ];
     const attendance = roomIds.length
       ? await this.prisma.roomAttendance.findMany({
@@ -1069,18 +1189,34 @@ export class CohortsService {
       const caughtUpByMe = caughtUp[s.id] === true;
       // Did I actually watch this day's material (all its videos)? Real
       // completion evidence, unlike merely being in the room.
-      const watchedByMe = videos.length > 0 && videos.every((v) => watchedSet.has(v.ytVideoId));
+      const watchedByMe =
+        videos.length > 0 && videos.every((v) => watchedSet.has(v.ytVideoId));
 
       if (!s.roomId) {
-        return { ...s, attendedByMe: false, attendeeCount: 0, caughtUpByMe, watchedByMe, videos };
+        return {
+          ...s,
+          attendedByMe: false,
+          attendeeCount: 0,
+          caughtUpByMe,
+          watchedByMe,
+          videos,
+        };
       }
       const { start, end } = this.dayBounds(s.scheduledAt);
       const dayRows = attendance.filter(
-        (a) => a.roomId === s.roomId && a.joinedAt >= start && a.joinedAt <= end,
+        (a) =>
+          a.roomId === s.roomId && a.joinedAt >= start && a.joinedAt <= end,
       );
       const attendeeCount = new Set(dayRows.map((a) => a.userId)).size;
       const attendedByMe = dayRows.some((a) => a.userId === userId);
-      return { ...s, attendedByMe, attendeeCount, caughtUpByMe, watchedByMe, videos };
+      return {
+        ...s,
+        attendedByMe,
+        attendeeCount,
+        caughtUpByMe,
+        watchedByMe,
+        videos,
+      };
     });
   }
 
@@ -1132,7 +1268,9 @@ export class CohortsService {
     else delete notes[sessionId];
 
     const base =
-      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member?.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
     await this.prisma.cohortMember.update({
@@ -1144,7 +1282,9 @@ export class CohortsService {
 
   // Per-member cohort intro lives in CohortMember.progress.intro (no schema
   // change). Shape: { goal?: string, blurb?: string }.
-  private getIntro(progress: unknown): { goal?: string; blurb?: string } | null {
+  private getIntro(
+    progress: unknown,
+  ): { goal?: string; blurb?: string } | null {
     if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
       const i = (progress as Record<string, unknown>).intro;
       if (i && typeof i === 'object' && !Array.isArray(i)) {
@@ -1181,7 +1321,8 @@ export class CohortsService {
     const members = cohort.members.map((m) => {
       const intro = this.getIntro(m.progress);
       const prof = profById.get(m.userId);
-      const prepFor = (prof?.examTargets?.length ? prof.examTargets : prof?.goals) ?? [];
+      const prepFor =
+        (prof?.examTargets?.length ? prof.examTargets : prof?.goals) ?? [];
       return {
         userId: m.userId,
         name: m.user?.name || 'Member',
@@ -1200,8 +1341,7 @@ export class CohortsService {
       isMember: Boolean(me),
       hasIntro: Boolean(me?.goal || me?.blurb),
       // Prefill suggestion for the intro form.
-      prepForSuggestion:
-        meProf?.examTargets?.[0] || meProf?.goals?.[0] || '',
+      prepForSuggestion: meProf?.examTargets?.[0] || meProf?.goals?.[0] || '',
     };
   }
 
@@ -1218,7 +1358,9 @@ export class CohortsService {
       select: { progress: true },
     });
     const base =
-      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member?.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
     const intro = {
@@ -1270,7 +1412,9 @@ export class CohortsService {
       delete caughtUp[sessionId];
     }
     const baseProgress =
-      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member?.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
 
@@ -1298,7 +1442,11 @@ export class CohortsService {
         orderBy: { orderIndex: 'asc' },
       })) ??
       (await this.prisma.studySession.findFirst({
-        where: { cohortId: cohort.id, status: 'SCHEDULED', scheduledAt: { gt: end } },
+        where: {
+          cohortId: cohort.id,
+          status: 'SCHEDULED',
+          scheduledAt: { gt: end },
+        },
         orderBy: { scheduledAt: 'asc' },
       })) ??
       (await this.prisma.studySession.findFirst({
@@ -1378,9 +1526,13 @@ export class CohortsService {
       v.durationSec && v.durationSec > 0 ? v.durationSec : DEFAULT_VIDEO_SEC;
     const totalCount = videos.length;
     const completedCount = videos.filter((v) => v.watched).length;
-    const remainingSec = videos.filter((v) => !v.watched).reduce((a, v) => a + dur(v), 0);
-    const dailyBudgetSec = (sessions.find((s) => s.studyHours)?.studyHours ?? 2) * 3600 || 2 * 3600;
-    const etaDays = remainingSec > 0 ? Math.ceil(remainingSec / dailyBudgetSec) : 0;
+    const remainingSec = videos
+      .filter((v) => !v.watched)
+      .reduce((a, v) => a + dur(v), 0);
+    const dailyBudgetSec =
+      (sessions.find((s) => s.studyHours)?.studyHours ?? 2) * 3600 || 2 * 3600;
+    const etaDays =
+      remainingSec > 0 ? Math.ceil(remainingSec / dailyBudgetSec) : 0;
 
     const current = await this.getRoomCurrentSession(roomId);
 
@@ -1404,14 +1556,21 @@ export class CohortsService {
       progress: {
         completedCount,
         totalCount,
-        percent: totalCount ? Math.round((completedCount / totalCount) * 100) : 0,
+        percent: totalCount
+          ? Math.round((completedCount / totalCount) * 100)
+          : 0,
         remainingSec,
         etaDays,
       },
     };
   }
 
-  async createSession(cohortId: string, userId: string, topic: string, scheduledAt: Date) {
+  async createSession(
+    cohortId: string,
+    userId: string,
+    topic: string,
+    scheduledAt: Date,
+  ) {
     await this.assertMember(cohortId, userId);
     return this.prisma.studySession.create({
       data: { cohortId, topic, scheduledAt },
@@ -1420,7 +1579,12 @@ export class CohortsService {
 
   // ── Quizzes ───────────────────────────────────────────────────────────────
 
-  async generateQuiz(cohortId: string, userId: string, numQuestions = 5, sessionId?: string) {
+  async generateQuiz(
+    cohortId: string,
+    userId: string,
+    numQuestions = 5,
+    sessionId?: string,
+  ) {
     await this.assertMember(cohortId, userId);
 
     const cohort = await this.prisma.cohort.findUnique({
@@ -1448,16 +1612,22 @@ export class CohortsService {
       topics = [session.topic, ...videoTitles].filter(Boolean);
       quizTitle = `${cohort.playlist.title} — ${session.topic}`;
     } else {
-      const curriculum = cohort.playlist.plan.curriculum as Array<{ title: string }>;
+      const curriculum = cohort.playlist.plan.curriculum as Array<{
+        title: string;
+      }>;
       topics = curriculum.map((t) => t.title);
     }
 
     try {
-      const { data } = await axios.post(`${AI_URL}/quiz`, {
-        playlistTitle: quizTitle,
-        topics,
-        numQuestions,
-      }, { timeout: 60_000 });
+      const { data } = await axios.post(
+        `${AI_URL}/quiz`,
+        {
+          playlistTitle: quizTitle,
+          topics,
+          numQuestions,
+        },
+        { timeout: 60_000 },
+      );
       return data;
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'AI service unavailable';
@@ -1478,7 +1648,9 @@ export class CohortsService {
     let score = 0;
     const qs = questions as Array<{ answer: string }>;
     const ans = answers as string[];
-    qs.forEach((q, i) => { if (ans[i] === q.answer) score++; });
+    qs.forEach((q, i) => {
+      if (ans[i] === q.answer) score++;
+    });
 
     return this.prisma.quizAttempt.create({
       data: {
@@ -1511,18 +1683,26 @@ export class CohortsService {
     const cohort = await this.prisma.cohort.findFirst({
       where: { roomId },
       include: {
-        playlist: { include: { videos: { select: { ytVideoId: true, title: true } } } },
+        playlist: {
+          include: { videos: { select: { ytVideoId: true, title: true } } },
+        },
       },
     });
     if (!cohort?.playlist) throw new NotFoundException('Cohort not found');
     await this.assertMember(cohort.id, userId);
 
     const findTitle = (vid?: string | null) =>
-      vid ? cohort.playlist!.videos.find((v) => v.ytVideoId === vid)?.title ?? null : null;
+      vid
+        ? (cohort.playlist!.videos.find((v) => v.ytVideoId === vid)?.title ??
+          null)
+        : null;
     let topic = findTitle(videoId);
     if (!topic) {
       const current = await this.getRoomCurrentSession(roomId);
-      topic = findTitle(current?.videoIds?.[0]) || current?.topic || cohort.playlist.title;
+      topic =
+        findTitle(current?.videoIds?.[0]) ||
+        current?.topic ||
+        cohort.playlist.title;
     }
 
     try {
@@ -1562,13 +1742,18 @@ export class CohortsService {
     // A round takes ~75s+ (6 x 12s + countdown), so two score posts closer than
     // this can't be two real rounds.
     const MIN_ROUND_GAP_MS = 60_000;
-    const add = Math.min(MAX_ROUND_POINTS, Math.max(0, Math.round(Number(points) || 0)));
+    const add = Math.min(
+      MAX_ROUND_POINTS,
+      Math.max(0, Math.round(Number(points) || 0)),
+    );
     const member = await this.prisma.cohortMember.findUnique({
       where: { cohortId_userId: { cohortId, userId } },
       select: { progress: true },
     });
     const base =
-      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member?.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
     const lastAt = Number(base.lastQuizScoreAt) || 0;
@@ -1578,8 +1763,15 @@ export class CohortsService {
     const total = this.getQuizPoints(member?.progress) + add;
     await this.prisma.cohortMember.update({
       where: { cohortId_userId: { cohortId, userId } },
-      data: { progress: { ...base, quizPoints: total, lastQuizScoreAt: Date.now() } },
+      data: {
+        progress: { ...base, quizPoints: total, lastQuizScoreAt: Date.now() },
+      },
     });
+    return this.getScoreboard(cohortId);
+  }
+
+  async getMemberScoreboard(cohortId: string, userId: string) {
+    await this.assertMember(cohortId, userId);
     return this.getScoreboard(cohortId);
   }
 
@@ -1587,7 +1779,11 @@ export class CohortsService {
   async getScoreboard(cohortId: string) {
     const members = await this.prisma.cohortMember.findMany({
       where: { cohortId },
-      select: { userId: true, progress: true, user: { select: { name: true } } },
+      select: {
+        userId: true,
+        progress: true,
+        user: { select: { name: true } },
+      },
     });
     return members
       .map((m) => ({
@@ -1605,7 +1801,10 @@ export class CohortsService {
   // watchedVideos, so no schema change.
   private getTopicQuizzes(
     progress: unknown,
-  ): Record<string, { score: number; total: number; passed: boolean; at: string }> {
+  ): Record<
+    string,
+    { score: number; total: number; passed: boolean; at: string }
+  > {
     if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
       const tq = (progress as Record<string, unknown>).topicQuizzes;
       if (tq && typeof tq === 'object' && !Array.isArray(tq)) {
@@ -1624,7 +1823,11 @@ export class CohortsService {
   // is passed (>= CHECKPOINT_PASS). Topics with no mapped videos pass through so
   // they can't dead-lock the cohort.
   private buildTopicGate(
-    curriculum: Array<{ title?: string; description?: string; videoPositions?: number[] }>,
+    curriculum: Array<{
+      title?: string;
+      description?: string;
+      videoPositions?: number[];
+    }>,
     videos: Array<{
       ytVideoId: string;
       title: string;
@@ -1643,7 +1846,8 @@ export class CohortsService {
         .filter((v): v is NonNullable<typeof v> => Boolean(v));
       const videoIds = vids.map((v) => v.ytVideoId);
       const watchedCount = videoIds.filter((v) => watched.has(v)).length;
-      const complete = videoIds.length > 0 ? watchedCount === videoIds.length : true;
+      const complete =
+        videoIds.length > 0 ? watchedCount === videoIds.length : true;
       const rec = quizzes[String(index)] ?? null;
       const passed = Boolean(rec?.passed) || videoIds.length === 0;
       return {
@@ -1685,7 +1889,12 @@ export class CohortsService {
             plan: { select: { curriculum: true } },
             videos: {
               orderBy: { position: 'asc' },
-              select: { ytVideoId: true, title: true, thumbnailUrl: true, position: true },
+              select: {
+                ytVideoId: true,
+                title: true,
+                thumbnailUrl: true,
+                position: true,
+              },
             },
           },
         },
@@ -1693,7 +1902,11 @@ export class CohortsService {
     });
     const curriculum =
       (cohort?.playlist?.plan?.curriculum as
-        | Array<{ title?: string; description?: string; videoPositions?: number[] }>
+        | Array<{
+            title?: string;
+            description?: string;
+            videoPositions?: number[];
+          }>
         | undefined) ?? [];
     const videos = cohort?.playlist?.videos ?? [];
     return { cohort, curriculum, videos };
@@ -1707,7 +1920,11 @@ export class CohortsService {
       where: { cohortId_userId: { cohortId, userId } },
       select: { progress: true },
     });
-    const { topics } = this.buildTopicGate(curriculum, videos, member?.progress);
+    const { topics } = this.buildTopicGate(
+      curriculum,
+      videos,
+      member?.progress,
+    );
     return {
       passRatio: CHECKPOINT_PASS,
       topics: topics.map((t) => ({
@@ -1735,27 +1952,37 @@ export class CohortsService {
     numQuestions = 5,
   ) {
     await this.assertMember(cohortId, userId);
-    const { cohort, curriculum, videos } = await this.loadCurriculumAndVideos(cohortId);
+    const { cohort, curriculum, videos } =
+      await this.loadCurriculumAndVideos(cohortId);
     const topicDef = curriculum[topicIndex];
-    if (!cohort?.playlist || !topicDef) throw new NotFoundException('Topic not found');
+    if (!cohort?.playlist || !topicDef)
+      throw new NotFoundException('Topic not found');
 
     const member = await this.prisma.cohortMember.findUnique({
       where: { cohortId_userId: { cohortId, userId } },
       select: { progress: true },
     });
-    const { topics } = this.buildTopicGate(curriculum, videos, member?.progress);
+    const { topics } = this.buildTopicGate(
+      curriculum,
+      videos,
+      member?.progress,
+    );
     if (!topics[topicIndex]?.unlocked) {
-      throw new ForbiddenException('Pass the previous topic to unlock this checkpoint');
+      throw new ForbiddenException(
+        'Pass the previous topic to unlock this checkpoint',
+      );
     }
 
-    const quizTopics = [topicDef.title, ...topics[topicIndex].videos.map((v) => v.title)].filter(
-      (x): x is string => Boolean(x),
-    );
+    const quizTopics = [
+      topicDef.title,
+      ...topics[topicIndex].videos.map((v) => v.title),
+    ].filter((x): x is string => Boolean(x));
     try {
       const { data } = await axios.post(
         `${AI_URL}/quiz`,
         {
-          playlistTitle: `${cohort.playlist.title} — ${topicDef.title ?? ''}`.trim(),
+          playlistTitle:
+            `${cohort.playlist.title} — ${topicDef.title ?? ''}`.trim(),
           topics: quizTopics,
           numQuestions,
         },
@@ -1782,7 +2009,9 @@ export class CohortsService {
     const qs = questions as Array<{ answer: string }>;
     const ans = answers as string[];
     let score = 0;
-    qs.forEach((q, i) => { if (ans[i] === q.answer) score++; });
+    qs.forEach((q, i) => {
+      if (ans[i] === q.answer) score++;
+    });
     const total = qs.length;
     const passedNow = total > 0 && score / total >= CHECKPOINT_PASS;
 
@@ -1791,13 +2020,20 @@ export class CohortsService {
       select: { progress: true },
     });
     const base =
-      member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member?.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
     const tq = { ...this.getTopicQuizzes(member?.progress) };
     const prev = tq[String(topicIndex)];
     const passed = Boolean(prev?.passed) || passedNow;
-    tq[String(topicIndex)] = { score, total, passed, at: new Date().toISOString() };
+    tq[String(topicIndex)] = {
+      score,
+      total,
+      passed,
+      at: new Date().toISOString(),
+    };
 
     await this.prisma.cohortMember.update({
       where: { cohortId_userId: { cohortId, userId } },
@@ -1835,7 +2071,9 @@ export class CohortsService {
           include: { user: { select: { id: true, name: true, email: true } } },
           orderBy: { joinedAt: 'asc' },
         },
-        playlist: { select: { title: true, _count: { select: { videos: true } } } },
+        playlist: {
+          select: { title: true, _count: { select: { videos: true } } },
+        },
       },
     });
     if (!cohort) return null;
@@ -1844,7 +2082,14 @@ export class CohortsService {
     const allSessions = await this.prisma.studySession.findMany({
       where: { cohortId },
       orderBy: { orderIndex: 'asc' },
-      select: { id: true, topic: true, scheduledAt: true, roomId: true, videoIds: true, status: true },
+      select: {
+        id: true,
+        topic: true,
+        scheduledAt: true,
+        roomId: true,
+        videoIds: true,
+        status: true,
+      },
     });
     // POSTPONED days lapsed without completion and had their content carried
     // forward, so they don't count toward the plan's day total or completion.
@@ -1855,7 +2100,9 @@ export class CohortsService {
     const totalDays = sessions.length;
 
     const roomIds = [
-      ...new Set(sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r))),
+      ...new Set(
+        sessions.map((s) => s.roomId).filter((r): r is string => Boolean(r)),
+      ),
     ];
     const [attendance, attempts] = await Promise.all([
       roomIds.length
@@ -1868,14 +2115,21 @@ export class CohortsService {
           ),
       this.prisma.quizAttempt.findMany({
         where: { cohortId, studySessionId: { not: null } },
-        select: { userId: true, studySessionId: true, score: true, questions: true },
+        select: {
+          userId: true,
+          studySessionId: true,
+          score: true,
+          questions: true,
+        },
       }),
     ]);
 
     const passed = new Set<string>();
     const scoreByUser = new Map<string, { sum: number; n: number }>();
     for (const a of attempts) {
-      const qCount = Array.isArray(a.questions) ? (a.questions as unknown[]).length : 5;
+      const qCount = Array.isArray(a.questions)
+        ? (a.questions as unknown[]).length
+        : 5;
       const ratio = qCount > 0 ? a.score / qCount : 0;
       if (ratio >= CHECKPOINT_PASS && a.studySessionId) {
         passed.add(`${a.userId}::${a.studySessionId}`);
@@ -1903,12 +2157,17 @@ export class CohortsService {
       const flags: boolean[] = elapsed.map((s, i) => {
         const didPass = passed.has(`${m.userId}::${s.id}`);
         const vids = s.videoIds ?? [];
-        const watchedAll = vids.length > 0 && vids.every((v) => watchedSet.has(v));
+        const watchedAll =
+          vids.length > 0 && vids.every((v) => watchedSet.has(v));
         let attended = false;
         if (s.roomId) {
           const { start, end } = this.dayBounds(s.scheduledAt);
           attended = attendance.some(
-            (a) => a.roomId === s.roomId && a.userId === m.userId && a.joinedAt >= start && a.joinedAt <= end,
+            (a) =>
+              a.roomId === s.roomId &&
+              a.userId === m.userId &&
+              a.joinedAt >= start &&
+              a.joinedAt <= end,
           );
         }
         if (attended) attendedDays++;
@@ -1936,7 +2195,8 @@ export class CohortsService {
         behind,
         onTrack: behind === 0,
         videosWatched: watchedSet.size,
-        avgCheckpointScore: sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
+        avgCheckpointScore:
+          sc && sc.n ? Math.round((sc.sum / sc.n) * 100) : null,
         checkpointBackedDays,
         attendedDays,
         completedToday: todayIdx >= 0 ? flags[todayIdx] : false,
@@ -1945,7 +2205,11 @@ export class CohortsService {
 
     const quorum = this.cohortStreakQuorum(cohort.members.length);
     let cohortStreak = 0;
-    for (let i = perDayCompleted.length - 1; i >= 0 && perDayCompleted[i] >= quorum; i--) {
+    for (
+      let i = perDayCompleted.length - 1;
+      i >= 0 && perDayCompleted[i] >= quorum;
+      i--
+    ) {
       cohortStreak++;
     }
 
@@ -1976,7 +2240,11 @@ export class CohortsService {
       return rest;
     };
     const leaderboard = [...p.rows]
-      .sort((a, b) => b.completed - a.completed || (b.avgCheckpointScore ?? -1) - (a.avgCheckpointScore ?? -1))
+      .sort(
+        (a, b) =>
+          b.completed - a.completed ||
+          (b.avgCheckpointScore ?? -1) - (a.avgCheckpointScore ?? -1),
+      )
       .map(strip);
 
     const me = p.rows.find((r) => r.userId === userId);
@@ -2019,7 +2287,9 @@ export class CohortsService {
       // Only nudge when it stings: someone already did today, or a streak lives.
       if (p.todayCompletedCount === 0 && p.cohortStreak === 0) continue;
 
-      const completedNames = p.rows.filter((r) => r.completedToday).map((r) => r.name);
+      const completedNames = p.rows
+        .filter((r) => r.completedToday)
+        .map((r) => r.name);
       const missing = p.rows.filter((r) => !r.completedToday && r.email);
       if (missing.length === 0) continue;
 
@@ -2045,7 +2315,8 @@ export class CohortsService {
   private getWatchedVideos(progress: unknown): string[] {
     if (progress && typeof progress === 'object' && !Array.isArray(progress)) {
       const w = (progress as Record<string, unknown>).watchedVideos;
-      if (Array.isArray(w)) return w.filter((x): x is string => typeof x === 'string');
+      if (Array.isArray(w))
+        return w.filter((x): x is string => typeof x === 'string');
     }
     return [];
   }
@@ -2071,7 +2342,9 @@ export class CohortsService {
     watched.add(videoId);
 
     const base =
-      member.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
+      member.progress &&
+      typeof member.progress === 'object' &&
+      !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
     await this.prisma.cohortMember.update({
@@ -2203,10 +2476,7 @@ export class CohortsService {
     const anchor = new Date(Math.max(lastAt.getTime(), endToday.getTime()));
     let maxOrder = sessions.reduce((mx, s) => Math.max(mx, s.orderIndex), -1);
 
-    const dataFor = (
-      vids: typeof remaining,
-      orderIndex: number,
-    ) => {
+    const dataFor = (vids: typeof remaining, orderIndex: number) => {
       const totalSec = vids.reduce((a, v) => a + durSec(v), 0);
       return {
         videoIds: vids.map((v) => v.ytVideoId),
@@ -2268,7 +2538,9 @@ export class CohortsService {
     });
     if (!cohort) throw new NotFoundException('Cohort not found');
     if (cohort.createdById !== userId) {
-      throw new ForbiddenException('Only the creator can recompute the schedule');
+      throw new ForbiddenException(
+        'Only the creator can recompute the schedule',
+      );
     }
     return this.recomputeScheduleFromProgress(cohortId);
   }
@@ -2291,7 +2563,10 @@ export class CohortsService {
         members: { select: { progress: true } },
         playlist: {
           include: {
-            videos: { select: { ytVideoId: true }, orderBy: { position: 'asc' } },
+            videos: {
+              select: { ytVideoId: true },
+              orderBy: { position: 'asc' },
+            },
           },
         },
       },
@@ -2315,7 +2590,7 @@ export class CohortsService {
 
     // Furthest point the cohort reached = the max index across watched videos and
     // the current pointer (handles back-jumps too).
-    let furthest = reachedId != null ? indexOf.get(reachedId) ?? -1 : -1;
+    let furthest = reachedId != null ? (indexOf.get(reachedId) ?? -1) : -1;
     for (const w of watched) {
       const i = indexOf.get(w);
       if (i != null && i > furthest) furthest = i;
@@ -2362,6 +2637,22 @@ export class CohortsService {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  private isOwnStorageUrl(raw: string) {
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'https:') return false;
+      const hosts = [
+        process.env.CLOUDFRONT_DOMAIN,
+        process.env.S3_BUCKET_NAME
+          ? `${process.env.S3_BUCKET_NAME}.s3.${process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1'}.amazonaws.com`
+          : undefined,
+      ].filter(Boolean);
+      return hosts.includes(url.host);
+    } catch {
+      return false;
+    }
+  }
 
   private async assertMember(cohortId: string, userId: string) {
     const m = await this.prisma.cohortMember.findUnique({

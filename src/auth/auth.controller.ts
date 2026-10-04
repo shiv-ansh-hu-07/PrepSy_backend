@@ -85,6 +85,11 @@ export class AuthController {
     if (!payload?.email || !payload?.sub) {
       throw new UnauthorizedException('Invalid Google token payload');
     }
+    // We link Google sign-ins to existing accounts by email, so only trust an
+    // email Google has actually verified (else: account takeover by email).
+    if (payload.email_verified !== true) {
+      throw new UnauthorizedException('Your Google email is not verified');
+    }
 
     return this.auth.oauthLogin(
       'google',
