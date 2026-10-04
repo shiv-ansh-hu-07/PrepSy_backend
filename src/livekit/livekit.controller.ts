@@ -1,5 +1,7 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
+import { Controller, Get, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
+import { OptionalJwtAuthGuard } from '../analytics/optional-jwt.guard';
+import type { RequestWithUser } from '../auth/auth-user.interface';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -34,8 +36,13 @@ export class LivekitController {
     return new RoomServiceClient(host, apiKey, apiSecret);
   }
 
+  // Guests may join rooms, so a token isn't required — but the LiveKit identity
+  // is decided here: a signed-in caller is always their own user id, and an
+  // anonymous caller is always a `guest-` identity (can't impersonate a user).
   @Get('token')
+  @UseGuards(OptionalJwtAuthGuard)
   async getToken(
+    @Req() req: RequestWithUser,
     @Query('room') room: string,
     @Query('user') user: string,
     @Query('name') name: string,
@@ -84,8 +91,26 @@ export class LivekitController {
       });
     }
 
-    const identity = user || `guest-${Math.random().toString(36).slice(2)}`;
-    const displayName = name || 'Guest';
+    const authedId = req?.user?.id || req?.user?.sub || null;
+    let identity: string;
+    let displayName: string;
+    if (authedId) {
+      const account = await this.prisma.user.findUnique({
+        where: { id: authedId },
+        select: { id: true, name: true, email: true },
+      });
+      if (!account) {
+        return res.status(401).json({ error: 'Unknown user' });
+      }
+      identity = account.id;
+      displayName = account.name || account.email.split('@')[0] || 'User';
+    } else {
+      const claimed = (user || '').trim();
+      identity = claimed.startsWith('guest-')
+        ? claimed.slice(0, 64)
+        : `guest-${claimed.slice(0, 40) || Math.random().toString(36).slice(2)}`;
+      displayName = (name || 'Guest').trim().slice(0, 60) || 'Guest';
+    }
     const roomService = this.getRoomServiceClient();
 
     if (!roomService) {

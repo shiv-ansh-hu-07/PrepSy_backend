@@ -5,6 +5,11 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
+  // Fail fast rather than sign tokens with a missing/guessable secret.
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET not defined');
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Behind Caddy on EC2: trust the proxy so req.ip is the real client IP

@@ -875,7 +875,8 @@ export class CohortsService {
 
   // studySessionId scopes the thread list: a specific id returns that checkpoint's
   // threads; omitted (null) returns the general cohort board, keeping them separate.
-  async getDiscussions(cohortId: string, studySessionId?: string) {
+  async getDiscussions(cohortId: string, userId: string, studySessionId?: string) {
+    await this.assertMember(cohortId, userId);
     return this.prisma.discussionPost.findMany({
       where: { cohortId, parentId: null, studySessionId: studySessionId ?? null },
       include: {
@@ -1555,7 +1556,13 @@ export class CohortsService {
   // CohortMember.progress.quizPoints — no schema change). Returns the scoreboard.
   async addQuizPoints(cohortId: string, userId: string, points: number) {
     await this.assertMember(cohortId, userId);
-    const add = Math.max(0, Math.round(Number(points) || 0));
+    // Points are scored client-side, so bound what one post can add: a round is
+    // 6 questions x (100 base + up to 100 speed bonus) = 1200 max.
+    const MAX_ROUND_POINTS = 1200;
+    // A round takes ~75s+ (6 x 12s + countdown), so two score posts closer than
+    // this can't be two real rounds.
+    const MIN_ROUND_GAP_MS = 60_000;
+    const add = Math.min(MAX_ROUND_POINTS, Math.max(0, Math.round(Number(points) || 0)));
     const member = await this.prisma.cohortMember.findUnique({
       where: { cohortId_userId: { cohortId, userId } },
       select: { progress: true },
@@ -1564,10 +1571,14 @@ export class CohortsService {
       member?.progress && typeof member.progress === 'object' && !Array.isArray(member.progress)
         ? (member.progress as Record<string, unknown>)
         : {};
+    const lastAt = Number(base.lastQuizScoreAt) || 0;
+    if (Date.now() - lastAt < MIN_ROUND_GAP_MS) {
+      return this.getScoreboard(cohortId);
+    }
     const total = this.getQuizPoints(member?.progress) + add;
     await this.prisma.cohortMember.update({
       where: { cohortId_userId: { cohortId, userId } },
-      data: { progress: { ...base, quizPoints: total } },
+      data: { progress: { ...base, quizPoints: total, lastQuizScoreAt: Date.now() } },
     });
     return this.getScoreboard(cohortId);
   }

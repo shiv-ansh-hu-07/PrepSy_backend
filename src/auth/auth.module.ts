@@ -13,9 +13,13 @@ import { PresenceModule } from '../presence/presence.module';
     HttpModule,
     PresenceModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'default-dev-secret',
-      signOptions: { expiresIn: '7d' },
+    // No fallback secret: signing and verification must use the same real
+    // JWT_SECRET (main.ts refuses to boot without it).
+    JwtModule.registerAsync({
+      useFactory: () => ({
+        secret: process.env.JWT_SECRET,
+        signOptions: { expiresIn: '7d' },
+      }),
     }),
   ],
   providers: [AuthService, PrismaService, JwtStrategy],

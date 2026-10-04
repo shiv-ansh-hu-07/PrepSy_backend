@@ -71,8 +71,8 @@ export class RoomsController {
   }
 
   @Get()
-  getRooms() {
-    return this.roomsService.getRooms();
+  getRooms(@Req() req: RequestWithUser) {
+    return this.roomsService.getRooms(this.getUserId(req));
   }
 
   @Public()
@@ -121,15 +121,21 @@ export class RoomsController {
     return this.roomsService.getVideoState(roomId);
   }
 
-  @Public()
+  // Writing requires a signed-in room member (guests still read via GET above),
+  // so nobody can rewind/skip a room's saved position from outside it.
   @Post(':roomId/video-state')
   saveVideoState(
     @Param('roomId') roomId: string,
+    @Req() req: RequestWithUser,
     @Body('videoId') videoId?: string,
     @Body('positionSec') positionSec?: number,
     @Body('playing') playing?: boolean,
   ) {
-    return this.roomsService.saveVideoState(roomId, { videoId, positionSec, playing });
+    return this.roomsService.saveVideoState(roomId, this.getUserId(req), {
+      videoId,
+      positionSec,
+      playing,
+    });
   }
 
   @Get('search')

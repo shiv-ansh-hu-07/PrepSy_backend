@@ -118,9 +118,10 @@ export class CohortsController {
   @Get(':id/discussions')
   getDiscussions(
     @Param('id') id: string,
+    @Req() req: RequestWithUser,
     @Query('sessionId') sessionId?: string,
   ) {
-    return this.cohorts.getDiscussions(id, sessionId);
+    return this.cohorts.getDiscussions(id, this.uid(req), sessionId);
   }
 
   // Per-member, per-day notes (revisitable).

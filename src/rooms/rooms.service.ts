@@ -536,8 +536,18 @@ export class RoomsService {
     };
   }
 
-  async getRooms() {
-    const rooms = await this.prisma.room.findMany();
+  // Public rooms plus the caller's own/joined rooms — never other people's
+  // private rooms (their roomId is the invite link, so listing it leaks access).
+  async getRooms(userId: string) {
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        OR: [
+          { visibility: 'PUBLIC' },
+          { ownerId: userId },
+          { members: { some: { userId } } },
+        ],
+      },
+    });
     return { rooms };
   }
 
@@ -737,6 +747,7 @@ export class RoomsService {
 
     const rooms = await this.prisma.room.findMany({
       where: {
+        visibility: 'PUBLIC',
         tags: {
           hasSome: tags,
         },
@@ -787,13 +798,23 @@ export class RoomsService {
 
   async saveVideoState(
     roomId: string,
+    userId: string,
     data: { videoId?: string | null; positionSec?: number; playing?: boolean },
   ) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
-      select: { roomId: true },
+      select: { roomId: true, ownerId: true },
     });
     if (!room) throw new NotFoundException('Room not found');
+    if (room.ownerId !== userId) {
+      const member = await this.prisma.roomMember.findFirst({
+        where: { roomId, userId },
+        select: { id: true },
+      });
+      if (!member) {
+        throw new ForbiddenException('Join the room to save its playback');
+      }
+    }
     const videoId = data.videoId ?? null;
     const positionSec = Math.max(0, Math.round(Number(data.positionSec) || 0));
     const playing = Boolean(data.playing);
