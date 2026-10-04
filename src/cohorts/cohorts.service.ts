@@ -117,7 +117,9 @@ export class CohortsService {
     let reformCrew: string[] = [];
     if (reformFromCohortId) {
       const source = await this.prisma.cohort.findFirst({
-        where: { id: reformFromCohortId, members: { some: { userId } } },
+        // Only the source cohort's creator may carry its crew over (the
+        // button is creator-only; this stops any member enrolling everyone).
+        where: { id: reformFromCohortId, createdById: userId },
         include: { members: { select: { userId: true } } },
       });
       if (source) {
