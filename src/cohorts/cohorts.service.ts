@@ -489,8 +489,14 @@ export class CohortsService {
         .catch(() => undefined);
 
       const joinUrl = `${frontendUrl}/room/${roomId}`;
+      const standings = await this.getStandings(session.cohortId).catch(
+        () => null,
+      );
       for (const member of session.cohort.members) {
         if (!member.user?.email) continue;
+        const race = standings
+          ? this.personalStanding(standings, member.userId)
+          : null;
         const st = statsById.get(member.userId) ?? {
           streakDays: 0,
           weekMinutes: 0,
@@ -510,6 +516,7 @@ export class CohortsService {
             st.goalMinutes > 0
               ? `${this.formatMins(st.goalMinutes)}/day`
               : null,
+          race,
         });
       }
     }
@@ -582,6 +589,9 @@ export class CohortsService {
       const attended = new Set(attendance.map((a) => a.userId));
 
       const joinUrl = `${frontendUrl}/room/${roomId}`;
+      const standings = await this.getStandings(session.cohortId).catch(
+        () => null,
+      );
       for (const member of session.cohort.members) {
         if (!member.user?.email || attended.has(member.userId)) continue;
         const st = statsById.get(member.userId);
@@ -591,6 +601,9 @@ export class CohortsService {
           topic: session.topic,
           joinUrl,
           streakDays: st?.streakDays ?? 0,
+          race: standings
+            ? this.personalStanding(standings, member.userId)
+            : null,
         });
       }
     }
@@ -2491,8 +2504,14 @@ export class CohortsService {
       const p = await this.buildCohortProgress(t.cohortId).catch(() => null);
       if (!p || !p.todaySession || !p.roomId) continue;
 
-      // Only nudge when it stings: someone already did today, or a streak lives.
-      if (p.todayCompletedCount === 0 && p.cohortStreak === 0) continue;
+      // Only nudge when it stings: someone already did today, a streak lives,
+      // or somebody has put time on the weekly board today.
+      const standings = await this.getStandings(t.cohortId).catch(() => null);
+      const raceMoving = Boolean(
+        standings?.members.some((m) => m.todaySec > 0),
+      );
+      if (p.todayCompletedCount === 0 && p.cohortStreak === 0 && !raceMoving)
+        continue;
 
       const completedNames = p.rows
         .filter((r) => r.completedToday)
@@ -2503,6 +2522,7 @@ export class CohortsService {
       const joinUrl = `${frontendUrl}/room/${p.roomId}`;
       for (const m of missing) {
         await this.emailService.sendCohortStreakEmail(m.email!, {
+          race: standings ? this.personalStanding(standings, m.userId) : null,
           name: m.name,
           cohortName: p.cohortName,
           topic: p.todaySession.topic,
@@ -2893,7 +2913,225 @@ export class CohortsService {
         ...(earned ? { studySeconds: { increment: earned } } : {}),
       },
     });
+    if (earned) {
+      const day = this.istDayKey(now);
+      await this.prisma.cohortStudyDay
+        .upsert({
+          where: {
+            cohortId_userId_day: { cohortId: cohort.id, userId, day },
+          },
+          create: { cohortId: cohort.id, userId, day, seconds: earned },
+          update: { seconds: { increment: earned } },
+        })
+        .catch(() => undefined);
+    }
     return { ok: true };
+  }
+
+  // ── Standings: the weekly race ───────────────────────────────────────────
+
+  // Monday (IST) of the week containing `key`.
+  private weekStartKey(key: string): string {
+    const d = new Date(key + 'T12:00:00Z');
+    const dow = (d.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+    return this.shiftDayKey(key, -dow);
+  }
+
+  // Everything competitive about a cohort in one pass: this week's study time
+  // per member (resets every Monday so the bottom half always has a fresh
+  // shot), today's time, all-time, week rank + movement since yesterday, who
+  // is live, and last week's champion. Shared by the live board and emails.
+  async getStandings(cohortId: string) {
+    const cohort = await this.prisma.cohort.findUnique({
+      where: { id: cohortId },
+      include: {
+        members: {
+          include: { user: { select: { id: true, name: true, email: true } } },
+        },
+      },
+    });
+    if (!cohort) return null;
+
+    const now = new Date();
+    const today = this.istDayKey(now);
+    const weekStart = this.weekStartKey(today);
+    const lastWeekStart = this.shiftDayKey(weekStart, -7);
+    const days = await this.prisma.cohortStudyDay.findMany({
+      where: { cohortId, day: { gte: lastWeekStart } },
+      select: { userId: true, day: true, seconds: true },
+    });
+
+    const sum = (uid: string, from: string, to: string) =>
+      days
+        .filter((d) => d.userId === uid && d.day >= from && d.day < to)
+        .reduce((a, d) => a + d.seconds, 0);
+    const tomorrow = this.shiftDayKey(today, 1);
+
+    const rows = cohort.members.map((m) => ({
+      userId: m.userId,
+      name: m.user?.name || 'Member',
+      email: m.user?.email || null,
+      allTimeSec: m.studySeconds,
+      weekSec: sum(m.userId, weekStart, tomorrow),
+      todaySec: sum(m.userId, today, tomorrow),
+      // Week-to-date as of the end of yesterday → rank movement today.
+      prevWeekSec: sum(m.userId, weekStart, today),
+      lastWeekSec: sum(m.userId, lastWeekStart, weekStart),
+      live: Boolean(
+        m.presenceAt &&
+          now.getTime() - m.presenceAt.getTime() <= PRESENCE_LIVE_MS,
+      ),
+      videosWatched: this.getWatchedVideos(m.progress).length,
+    }));
+
+    const rankBy = (key: 'weekSec' | 'prevWeekSec' | 'allTimeSec') => {
+      const order = [...rows].sort(
+        (a, b) => b[key] - a[key] || b.videosWatched - a.videosWatched,
+      );
+      return new Map(order.map((r, i) => [r.userId, i + 1]));
+    };
+    const weekRank = rankBy('weekSec');
+    const prevRank = rankBy('prevWeekSec');
+    const allRank = rankBy('allTimeSec');
+
+    const lastWeekTop = [...rows].sort(
+      (a, b) => b.lastWeekSec - a.lastWeekSec,
+    )[0];
+    const champion =
+      lastWeekTop && lastWeekTop.lastWeekSec >= 60
+        ? {
+            userId: lastWeekTop.userId,
+            name: lastWeekTop.name,
+            seconds: lastWeekTop.lastWeekSec,
+          }
+        : null;
+
+    const members = rows
+      .map((r) => ({
+        ...r,
+        weekRank: weekRank.get(r.userId)!,
+        allTimeRank: allRank.get(r.userId)!,
+        // Positive = climbed since yesterday. Only meaningful once anyone had
+        // time before today this week.
+        rankDelta: rows.some((x) => x.prevWeekSec > 0)
+          ? prevRank.get(r.userId)! - weekRank.get(r.userId)!
+          : 0,
+      }))
+      .sort((a, b) => a.weekRank - b.weekRank);
+
+    return {
+      cohortId,
+      cohortName: cohort.name,
+      roomId: cohort.roomId,
+      weekStart,
+      champion,
+      members,
+    };
+  }
+
+  // The personal angle on the standings, for one member: their rank, the
+  // leader, who's just above (and the gap), who's just below — the
+  // "one session and you pass them" target that makes emails sting.
+  personalStanding(
+    st: NonNullable<Awaited<ReturnType<CohortsService['getStandings']>>>,
+    userId: string,
+  ) {
+    const list = st.members;
+    const me = list.find((m) => m.userId === userId);
+    if (!me) return null;
+    const above = list.find((m) => m.weekRank === me.weekRank - 1) ?? null;
+    const below = list.find((m) => m.weekRank === me.weekRank + 1) ?? null;
+    const leader = list[0];
+    return {
+      rank: me.weekRank,
+      total: list.length,
+      weekSec: me.weekSec,
+      todaySec: me.todaySec,
+      rankDelta: me.rankDelta,
+      leader: leader
+        ? {
+            name: leader.name,
+            sec: leader.weekSec,
+            isYou: leader.userId === userId,
+          }
+        : null,
+      above: above
+        ? { name: above.name, gapSec: Math.max(0, above.weekSec - me.weekSec) }
+        : null,
+      below: below
+        ? { name: below.name, gapSec: Math.max(0, me.weekSec - below.weekSec) }
+        : null,
+      liveNames: list
+        .filter((m) => m.live && m.userId !== userId)
+        .map((m) => m.name),
+      champion: st.champion
+        ? {
+            name: st.champion.name,
+            sec: st.champion.seconds,
+            isYou: st.champion.userId === userId,
+          }
+        : null,
+      board: list.slice(0, 6).map((m) => ({
+        name: m.name,
+        sec: m.weekSec,
+        todaySec: m.todaySec,
+        rank: m.weekRank,
+        live: m.live,
+        isYou: m.userId === userId,
+      })),
+    };
+  }
+
+  // Monday 9 AM IST: last week's results + "new week, everyone's at 0".
+  @Cron('0 9 * * 1', { timeZone: 'Asia/Kolkata' })
+  async sendWeeklyCohortRecaps() {
+    const today = this.istDayKey(new Date());
+    const lastWeekStart = this.shiftDayKey(this.weekStartKey(today), -7);
+    const active = await this.prisma.cohortStudyDay.findMany({
+      where: { day: { gte: lastWeekStart, lt: this.weekStartKey(today) } },
+      select: { cohortId: true },
+      distinct: ['cohortId'],
+    });
+    const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    for (const { cohortId } of active) {
+      const st = await this.getStandings(cohortId).catch(() => null);
+      if (!st || !st.champion) continue;
+      const lastWeek = [...st.members]
+        .sort((a, b) => b.lastWeekSec - a.lastWeekSec)
+        .map((m, i) => ({
+          name: m.name,
+          sec: m.lastWeekSec,
+          rank: i + 1,
+          userId: m.userId,
+        }));
+      for (const m of st.members) {
+        if (!m.email) continue;
+        const mine = lastWeek.find((x) => x.userId === m.userId)!;
+        await this.emailService
+          .sendWeeklyCohortRecapEmail(m.email, {
+            name: m.name,
+            cohortName: st.cohortName,
+            joinUrl: st.roomId
+              ? `${frontendUrl}/room/${st.roomId}`
+              : `${frontendUrl}/cohort/${cohortId}`,
+            champion: {
+              name: st.champion.name,
+              sec: st.champion.seconds,
+              isYou: st.champion.userId === m.userId,
+            },
+            yourRank: mine.rank,
+            yourSec: mine.sec,
+            total: lastWeek.length,
+            board: lastWeek.slice(0, 6).map((x) => ({
+              name: x.name,
+              sec: x.sec,
+              rank: x.rank,
+              isYou: x.userId === m.userId,
+            })),
+          })
+          .catch(() => undefined);
+      }
+    }
   }
 
   // The cohort's live scoreboard: per member, time studied in the room, what
@@ -2975,11 +3213,43 @@ export class CohortsService {
         b.studySeconds - a.studySeconds || b.videosWatched - a.videosWatched,
     );
 
+    // Weekly race fields (rank resets every Monday) + last week's champion.
+    const st = await this.getStandings(cohortId);
+    const byUser = new Map((st?.members ?? []).map((m) => [m.userId, m]));
+    const withWeek = members.map((m) => {
+      const w = byUser.get(m.userId);
+      return {
+        ...m,
+        weekSeconds: w?.weekSec ?? 0,
+        todaySeconds: w?.todaySec ?? 0,
+        weekRank: w?.weekRank ?? 0,
+        rankDelta: w?.rankDelta ?? 0,
+        isChampion: Boolean(st?.champion && st.champion.userId === m.userId),
+      };
+    });
+    const me = st ? this.personalStanding(st, userId) : null;
+
     return {
+      champion: st?.champion
+        ? {
+            userId: st.champion.userId,
+            name: st.champion.name,
+            seconds: st.champion.seconds,
+          }
+        : null,
+      me: me
+        ? {
+            rank: me.rank,
+            above: me.above,
+            below: me.below,
+            leader: me.leader,
+            weekSec: me.weekSec,
+          }
+        : null,
       syncMode: cohort.syncMode === 'SOLO' ? 'SOLO' : 'SYNC',
       totalVideos: planVideos.length,
       liveCount: members.filter((m) => m.live).length,
-      members: members.map((m, i) => ({ ...m, rank: i + 1 })),
+      members: withWeek.map((m, i) => ({ ...m, rank: i + 1 })),
       generatedAt: new Date(now).toISOString(),
     };
   }

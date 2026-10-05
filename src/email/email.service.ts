@@ -17,6 +17,123 @@ function escapeHtml(value: unknown): string {
   );
 }
 
+// A member's place in their cohort's weekly race (see
+// CohortsService.personalStanding). Optional on every cohort email.
+export interface CohortRace {
+  rank: number;
+  total: number;
+  weekSec: number;
+  todaySec: number;
+  rankDelta: number;
+  leader: { name: string; sec: number; isYou: boolean } | null;
+  above: { name: string; gapSec: number } | null;
+  below: { name: string; gapSec: number } | null;
+  liveNames: string[];
+  champion: { name: string; sec: number; isYou: boolean } | null;
+  board: {
+    name: string;
+    sec: number;
+    todaySec: number;
+    rank: number;
+    live: boolean;
+    isYou: boolean;
+  }[];
+}
+
+const fmtStudy = (sec: number) => {
+  const mins = Math.floor((sec || 0) / 60);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
+const firstName = (name: string) => (name || 'Someone').trim().split(/\s+/)[0];
+const MEDAL = ['🥇', '🥈', '🥉'];
+const joinNames = (names: string[]) =>
+  names.length <= 1
+    ? names.join('')
+    : names.length === 2
+      ? `${names[0]} and ${names[1]}`
+      : `${names[0]}, ${names[1]} and ${names.length - 2} more`;
+
+// The personal one-liner that makes the leaderboard sting (or feel great).
+function raceHeadline(r: CohortRace): string {
+  if (r.total <= 1) return '';
+  if (r.rank === 1) {
+    if (r.weekSec === 0) {
+      return '🏁 The board is empty this week. First one in takes <strong>#1</strong>.';
+    }
+    const chase = r.below
+      ? r.below.gapSec < 1800
+        ? ` <strong>${escapeHtml(firstName(r.below.name))}</strong> is only <strong>${fmtStudy(r.below.gapSec)}</strong> behind and can pass you today.`
+        : ` ${escapeHtml(firstName(r.below.name))} is ${fmtStudy(r.below.gapSec)} behind. Keep it that way.`
+      : '';
+    return `👑 You're <strong>#1 this week</strong> with ${fmtStudy(r.weekSec)}.${chase}`;
+  }
+  const lead = r.leader
+    ? ` <strong>${escapeHtml(firstName(r.leader.name))}</strong> leads with ${fmtStudy(r.leader.sec)}.`
+    : '';
+  const target = r.above
+    ? r.above.gapSec === 0
+      ? ` You're tied with <strong>${escapeHtml(firstName(r.above.name))}</strong>. Any session breaks the tie.`
+      : ` You're <strong>${fmtStudy(r.above.gapSec)}</strong> behind <strong>${escapeHtml(firstName(r.above.name))}</strong>. One session and you pass them.`
+    : '';
+  return `You're <strong>#${r.rank} of ${r.total}</strong> this week.${lead}${target}`;
+}
+
+// The leaderboard block shared by every cohort email.
+function raceBlock(
+  r: CohortRace | null | undefined,
+  opts: { showLive?: boolean } = {},
+): string {
+  if (!r || r.total <= 1) return '';
+  const top = Math.max(1, ...r.board.map((b) => b.sec));
+  const rows = r.board
+    .map((b) => {
+      const pct = Math.round((b.sec / top) * 100);
+      const bg = b.isYou ? '#f3e8ff' : '#ffffff';
+      const live = b.live
+        ? ' <span style="color:#16a34a;font-size:11px;font-weight:700">● live</span>'
+        : '';
+      const today =
+        b.todaySec > 0
+          ? `<span style="color:#9aa4c7;font-size:11px"> · +${fmtStudy(b.todaySec)} today</span>`
+          : '';
+      return `
+        <tr style="background:${bg}">
+          <td style="padding:8px 6px 8px 12px;font-size:15px;width:28px">${MEDAL[b.rank - 1] || `<span style="color:#9aa4c7;font-size:13px;font-weight:700">#${b.rank}</span>`}</td>
+          <td style="padding:8px 6px;font-size:14px;color:#2f3b63;font-weight:${b.isYou ? 800 : 600}">
+            ${b.isYou ? 'You' : escapeHtml(b.name)}${live}${today}
+            <div style="height:5px;border-radius:999px;background:#eef0fb;margin-top:5px"><div style="height:5px;width:${pct}%;border-radius:999px;background:${b.isYou ? '#7c3aed' : '#a5b4fc'}"></div></div>
+          </td>
+          <td style="padding:8px 12px 8px 6px;font-size:14px;font-weight:800;color:#2f3b63;text-align:right;white-space:nowrap">${fmtStudy(b.sec)}</td>
+        </tr>`;
+    })
+    .join('');
+  const moved =
+    r.rankDelta > 0
+      ? `<p style="margin:0 0 8px;font-size:13px;color:#16a34a;font-weight:700">▲ You climbed ${r.rankDelta} place${r.rankDelta === 1 ? '' : 's'} since yesterday.</p>`
+      : r.rankDelta < 0
+        ? `<p style="margin:0 0 8px;font-size:13px;color:#dc2626;font-weight:700">▼ You dropped ${-r.rankDelta} place${r.rankDelta === -1 ? '' : 's'} since yesterday.</p>`
+        : '';
+  const liveLine =
+    opts.showLive && r.liveNames.length
+      ? `<p style="margin:0 0 10px;font-size:14px;color:#16a34a;font-weight:700">🔴 ${escapeHtml(joinNames(r.liveNames.map(firstName)))} ${r.liveNames.length === 1 ? 'is' : 'are'} studying right now.</p>`
+      : '';
+  const champ = r.champion
+    ? `<p style="margin:10px 0 0;font-size:12px;color:#9aa4c7">👑 Last week's champion: ${r.champion.isYou ? '<strong>you</strong>' : escapeHtml(r.champion.name)} (${fmtStudy(r.champion.sec)})</p>`
+    : '';
+  return `
+    <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:16px 16px 12px;margin:16px 0">
+      <p style="color:#8b95bd;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;margin:0 0 10px">🏆 This week's leaderboard · resets Monday</p>
+      ${liveLine}
+      <p style="margin:0 0 10px;font-size:15px;line-height:1.55;color:#2f3b63">${raceHeadline(r)}</p>
+      ${moved}
+      <table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;border-collapse:separate;border-spacing:0 4px">${rows}</table>
+      ${champ}
+    </div>`;
+}
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -191,9 +308,11 @@ export class EmailService {
       weekLabel: string;
       sessionsThisWeek: number;
       goalLabel?: string | null;
+      race?: CohortRace | null;
     },
   ) {
     if (!(await this.notificationsAllowed(to))) return;
+    const race = data.race && data.race.total > 1 ? data.race : null;
 
     const name = data.name?.trim() || 'there';
     const topicLine = data.topic
@@ -212,15 +331,21 @@ export class EmailService {
 
     await this.sendEmail({
       to,
-      subject: data.topic
-        ? `Your session is on: ${data.topic}`
-        : `Time to study — ${data.roomName}`,
+      subject:
+        race && race.rank === 1 && race.weekSec > 0
+          ? `Defend your #1 in ${data.roomName}: starts in 15 min 👑`
+          : race && race.above && race.above.gapSec > 0
+            ? `${fmtStudy(race.above.gapSec)} behind ${firstName(race.above.name)}: ${data.roomName} starts in 15 min`
+            : data.topic
+              ? `Your session is on: ${data.topic}`
+              : `Time to study — ${data.roomName}`,
       html: `
         <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
           <h2 style="color:#2f3b63;margin:0 0 6px">Time to study, ${escapeHtml(name)} 👋</h2>
           <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.roomName)}</strong> is ready for you.</p>
           ${startLine}
           ${topicLine}
+          ${raceBlock(race, { showLive: true })}
 
           <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:18px 20px;margin:6px 0 16px">
             <p style="color:#8b95bd;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;margin:0 0 10px">Your progress</p>
@@ -260,6 +385,7 @@ export class EmailService {
       completedNames: string[];
       memberCount: number;
       behind: number;
+      race?: CohortRace | null;
     },
   ) {
     if (!(await this.notificationsAllowed(to))) return;
@@ -310,6 +436,7 @@ export class EmailService {
           <h2 style="color:#2f3b63;margin:0 0 6px">Your crew is missing you, ${escapeHtml(name)} 👀</h2>
           <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.cohortName)}</strong> · today: ${escapeHtml(data.topic)}</p>
 
+          ${raceBlock(data.race, { showLive: true })}
           <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:18px 20px;margin:16px 0">
             <p style="color:#4a5a85;font-size:15px;line-height:1.6;margin:0 0 10px">${socialLine}</p>
             <p style="color:#4a5a85;font-size:14px;line-height:1.6;margin:0">${behindLine}</p>
@@ -340,9 +467,11 @@ export class EmailService {
       topic: string;
       joinUrl: string;
       streakDays: number;
+      race?: CohortRace | null;
     },
   ) {
     if (!(await this.notificationsAllowed(to))) return;
+    const race = data.race && data.race.total > 1 ? data.race : null;
 
     const name = data.name?.trim() || 'there';
     const streakLine =
@@ -352,12 +481,16 @@ export class EmailService {
 
     await this.sendEmail({
       to,
-      subject: `You're missing "${data.topic}" — your crew already started`,
+      subject:
+        race && race.liveNames.length
+          ? `${firstName(race.liveNames[0])}${race.liveNames.length > 1 ? ` +${race.liveNames.length - 1}` : ''} studying right now, you're #${race.rank} 🔥`
+          : `You're missing "${data.topic}" — your crew already started`,
       html: `
         <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
           <h2 style="color:#2f3b63;margin:0 0 6px">Your session already started, ${escapeHtml(name)} ⏰</h2>
           <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.cohortName)}</strong> · today: ${escapeHtml(data.topic)}</p>
           <p style="color:#6b78a0;font-size:13px;margin:0 0 16px">It kicked off about 10 minutes ago and you're not in yet.</p>
+          ${raceBlock(race, { showLive: true })}
 
           <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 18px;margin:0 0 22px">
             <p style="color:#c2410c;font-size:14px;line-height:1.6;margin:0">${streakLine} It's not too late — jump in now and keep it alive.</p>
@@ -390,6 +523,65 @@ export class EmailService {
         <p>Your "${escapeHtml(cohortName)}" study room is ready — join your cohort and study together.</p>
         <p><a href="${joinUrl}" style="background:#7c3aed;color:#ffffff;padding:10px 18px;border-radius:8px;text-decoration:none;display:inline-block">Join the room</a></p>
         ${this.unsubscribeFooter()}
+      `,
+    });
+  }
+
+  // Monday morning: last week's final standings, the champion, and the reset —
+  // "everyone's back at 0, the crown is up for grabs".
+  async sendWeeklyCohortRecapEmail(
+    to: string,
+    data: {
+      name?: string | null;
+      cohortName: string;
+      joinUrl: string;
+      champion: { name: string; sec: number; isYou: boolean };
+      yourRank: number;
+      yourSec: number;
+      total: number;
+      board: { name: string; sec: number; rank: number; isYou: boolean }[];
+    },
+  ) {
+    if (!(await this.notificationsAllowed(to))) return;
+    const name = data.name?.trim() || 'there';
+    const top = Math.max(1, ...data.board.map((b) => b.sec));
+    const rows = data.board
+      .map(
+        (b) => `
+        <tr style="background:${b.isYou ? '#f3e8ff' : '#ffffff'}">
+          <td style="padding:8px 6px 8px 12px;font-size:15px;width:28px">${MEDAL[b.rank - 1] || `<span style="color:#9aa4c7;font-size:13px;font-weight:700">#${b.rank}</span>`}</td>
+          <td style="padding:8px 6px;font-size:14px;color:#2f3b63;font-weight:${b.isYou ? 800 : 600}">${b.isYou ? 'You' : escapeHtml(b.name)}
+            <div style="height:5px;border-radius:999px;background:#eef0fb;margin-top:5px"><div style="height:5px;width:${Math.round((b.sec / top) * 100)}%;border-radius:999px;background:${b.isYou ? '#7c3aed' : '#a5b4fc'}"></div></div></td>
+          <td style="padding:8px 12px 8px 6px;font-size:14px;font-weight:800;color:#2f3b63;text-align:right">${fmtStudy(b.sec)}</td>
+        </tr>`,
+      )
+      .join('');
+    const verdict = data.champion.isYou
+      ? `👑 <strong>You won last week</strong> with ${fmtStudy(data.champion.sec)}. Everyone starts from 0 today, and they're coming for the crown.`
+      : data.yourSec === 0
+        ? `👑 <strong>${escapeHtml(data.champion.name)}</strong> took the crown with ${fmtStudy(data.champion.sec)}. You didn't get on the board last week, but it reset this morning. Everyone is at 0.`
+        : `👑 <strong>${escapeHtml(data.champion.name)}</strong> took the crown with ${fmtStudy(data.champion.sec)}. You finished <strong>#${data.yourRank} of ${data.total}</strong> with ${fmtStudy(data.yourSec)}. New week, everyone's at 0.`;
+
+    await this.sendEmail({
+      to,
+      subject: data.champion.isYou
+        ? `👑 You won the week in ${data.cohortName}. Can you defend it?`
+        : `👑 ${firstName(data.champion.name)} won the week in ${data.cohortName}. The crown is up for grabs`,
+      html: `
+        <div style="font-family:Inter,Arial,sans-serif;max-width:540px;margin:0 auto;padding:32px 24px;background:#fafbff;border-radius:16px">
+          <h2 style="color:#2f3b63;margin:0 0 6px">Week results, ${escapeHtml(name)} 🏆</h2>
+          <p style="color:#4a5a85;font-size:15px;margin:0 0 4px"><strong>${escapeHtml(data.cohortName)}</strong></p>
+          <p style="color:#2f3b63;font-size:15px;line-height:1.6;margin:14px 0">${verdict}</p>
+          <div style="background:#fff;border:1px solid #e8ecff;border-radius:14px;padding:14px 16px 10px;margin:0 0 20px">
+            <p style="color:#8b95bd;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;margin:0 0 8px">Final standings · last week</p>
+            <table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;border-collapse:separate;border-spacing:0 4px">${rows}</table>
+          </div>
+          <a href="${data.joinUrl}" style="display:inline-block;padding:13px 30px;background:#7c3aed;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">
+            Get on the board first →
+          </a>
+          <p style="color:#9aa4c7;font-size:12px;margin:16px 0 0">The first session of the week puts you at #1, even if only for a while.</p>
+          ${this.unsubscribeFooter()}
+        </div>
       `,
     });
   }

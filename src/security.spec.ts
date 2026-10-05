@@ -228,3 +228,80 @@ describe('EmailService escaping', () => {
     expect(html).toContain('&lt;a href=&quot;x&quot;&gt;');
   });
 });
+
+describe('race emails', () => {
+  const race = {
+    rank: 2,
+    total: 3,
+    weekSec: 3000,
+    todaySec: 0,
+    rankDelta: -1,
+    leader: { name: 'Bo <b>B</b>', sec: 3600, isYou: false },
+    above: { name: 'Bo <b>B</b>', gapSec: 600 },
+    below: null,
+    liveNames: ['Bo <b>B</b>'],
+    champion: null,
+    board: [
+      {
+        name: 'Bo <b>B</b>',
+        sec: 3600,
+        todaySec: 2400,
+        rank: 1,
+        live: true,
+        isYou: false,
+      },
+      {
+        name: 'Ann',
+        sec: 3000,
+        todaySec: 0,
+        rank: 2,
+        live: false,
+        isYou: true,
+      },
+    ],
+  };
+  const capture = () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { EmailService } = require('./email/email.service');
+    const svc = new EmailService({} as any);
+    const sent: any[] = [];
+    (svc as any).notificationsAllowed = () => Promise.resolve(true);
+    (svc as any).sendEmail = (o: any) => (sent.push(o), Promise.resolve(true));
+    return { svc, sent };
+  };
+
+  it('puts the leaderboard, the gap and who is live in the no-show email (escaped)', async () => {
+    const { svc, sent } = capture();
+    await svc.sendMissedSessionEmail('a@x', {
+      name: 'Ann',
+      cohortName: 'DSA',
+      topic: 'Arrays',
+      joinUrl: 'https://x/r',
+      streakDays: 2,
+      race,
+    });
+    expect(sent[0].subject).toContain('studying right now');
+    expect(sent[0].html).toContain('10m</strong> behind');
+    expect(sent[0].html).toContain('dropped 1 place');
+    expect(sent[0].html).not.toContain('<b>B</b>');
+  });
+
+  it('leader gets a defend-your-crown subject', async () => {
+    const { svc, sent } = capture();
+    await svc.sendSessionReminderEmail('a@x', {
+      roomName: 'DSA',
+      joinUrl: 'https://x/r',
+      streakDays: 1,
+      weekLabel: '1h',
+      sessionsThisWeek: 1,
+      race: {
+        ...race,
+        rank: 1,
+        above: null,
+        below: { name: 'Bo', gapSec: 300 },
+      },
+    });
+    expect(sent[0].subject).toContain('Defend your #1');
+    expect(sent[0].html).toContain('can pass you today');
+  });
+});

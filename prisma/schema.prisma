@@ -523,3 +523,17 @@ model Event {
   @@index([anonId, createdAt])
   @@index([createdAt])
 }
+
+// Per-day study time in a cohort room (IST day), accumulated from the room
+// heartbeat alongside CohortMember.studySeconds. Powers the weekly race
+// (resets every Monday), today's numbers and rank movement.
+model CohortStudyDay {
+  id       String @id @default(cuid())
+  cohortId String
+  userId   String
+  day      String // "YYYY-MM-DD" in IST
+  seconds  Int    @default(0)
+
+  @@unique([cohortId, userId, day])
+  @@index([cohortId, day])
+}

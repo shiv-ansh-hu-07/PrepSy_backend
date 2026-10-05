@@ -101,18 +101,20 @@ describe('private cohorts', () => {
 describe('updatePresence study time', () => {
   const make = (presenceAt: Date | null) => {
     const update = jest.fn().mockResolvedValue({});
+    const dayUpsert = jest.fn().mockResolvedValue({});
     const svc = svcWith({
       cohort: { findFirst: jest.fn().mockResolvedValue({ id: 'c1' }) },
       cohortMember: {
         findUnique: jest.fn().mockResolvedValue({ presenceAt }),
         update,
       },
+      cohortStudyDay: { upsert: dayUpsert },
     });
-    return { svc, update };
+    return { svc, update, dayUpsert };
   };
 
   it('credits the real gap between beats', async () => {
-    const { svc, update } = make(new Date(Date.now() - 15_000));
+    const { svc, update, dayUpsert } = make(new Date(Date.now() - 15_000));
     await svc.updatePresence('r1', 'u1', {
       videoId: 'v1',
       positionSec: 42,
@@ -123,6 +125,9 @@ describe('updatePresence study time', () => {
     expect(data.studySeconds.increment).toBeLessThanOrEqual(16);
     expect(data.watchingVideoId).toBe('v1');
     expect(data.watchingPositionSec).toBe(42);
+    expect(dayUpsert.mock.calls[0][0].update.seconds.increment).toBe(
+      data.studySeconds.increment,
+    );
   });
 
   it('credits nothing after a long gap (tab closed) or on the first beat', async () => {
@@ -140,6 +145,7 @@ describe('getLiveBoard', () => {
     const now = Date.now();
     const svc = svcWith({
       cohortMember: { findUnique: jest.fn().mockResolvedValue({ id: 'm' }) },
+      cohortStudyDay: { findMany: jest.fn().mockResolvedValue([]) },
       cohort: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'c1',
@@ -267,5 +273,83 @@ describe('video flags', () => {
     await expect(
       make(null, flag).svc.deleteFlag('c1', 'boss', 'f1'),
     ).resolves.toEqual({ ok: true });
+  });
+});
+
+describe('weekly standings', () => {
+  // 2026-10-07 is a Wednesday (IST); the week started Monday 2026-10-05.
+  beforeAll(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-07T10:00:00+05:30'));
+  });
+  afterAll(() => jest.useRealTimers());
+
+  const make = () =>
+    svcWith({
+      cohort: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'c1',
+          name: 'DSA',
+          roomId: 'r1',
+          members: [
+            {
+              userId: 'a',
+              studySeconds: 99999,
+              presenceAt: null,
+              progress: {},
+              user: { name: 'Ann A', email: 'a@x' },
+            },
+            {
+              userId: 'b',
+              studySeconds: 10,
+              presenceAt: new Date(),
+              progress: {},
+              user: { name: 'Bo B', email: 'b@x' },
+            },
+            {
+              userId: 'c',
+              studySeconds: 10,
+              presenceAt: null,
+              progress: {},
+              user: { name: 'Cy C', email: 'c@x' },
+            },
+          ],
+        }),
+      },
+      cohortStudyDay: {
+        findMany: jest.fn().mockResolvedValue([
+          // last week: Ann won
+          { userId: 'a', day: '2026-10-01', seconds: 7200 },
+          // this week up to yesterday: Ann ahead of Bo
+          { userId: 'a', day: '2026-10-06', seconds: 3000 },
+          { userId: 'b', day: '2026-10-05', seconds: 1200 },
+          // today: Bo overtakes Ann
+          { userId: 'b', day: '2026-10-07', seconds: 2400 },
+        ]),
+      },
+    });
+
+  it('ranks this week only, tracks movement and last week champion', async () => {
+    const st: any = await make().getStandings('c1');
+    const by = Object.fromEntries(st.members.map((m: any) => [m.userId, m]));
+    expect(st.weekStart).toBe('2026-10-05');
+    expect(by.b.weekSec).toBe(3600);
+    expect(by.b.todaySec).toBe(2400);
+    expect(by.a.weekSec).toBe(3000); // last week's 2h doesn't count
+    expect(by.b.weekRank).toBe(1);
+    expect(by.b.rankDelta).toBe(1); // was #2 yesterday
+    expect(by.a.rankDelta).toBe(-1);
+    expect(by.b.live).toBe(true);
+    expect(st.champion).toMatchObject({ userId: 'a', seconds: 7200 });
+  });
+
+  it('personal standing gives the near-peer target', async () => {
+    const svc = make();
+    const st: any = await svc.getStandings('c1');
+    const ann: any = svc.personalStanding(st, 'a');
+    expect(ann.rank).toBe(2);
+    expect(ann.above).toEqual({ name: 'Bo B', gapSec: 600 });
+    expect(ann.leader).toMatchObject({ name: 'Bo B', isYou: false });
+    expect(ann.liveNames).toEqual(['Bo B']);
+    expect(ann.champion.isYou).toBe(true);
   });
 });
