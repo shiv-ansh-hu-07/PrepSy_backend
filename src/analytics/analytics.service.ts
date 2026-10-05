@@ -192,4 +192,115 @@ export class AnalyticsService {
       }))
       .sort((a, b) => b.lastSeen.getTime() - a.lastSeen.getTime());
   }
+
+  // Cohort retention — the investability view. From the per-day study log
+  // (CohortStudyDay, from the room heartbeat): for each cohort, week by week
+  // (IST, Monday start) how many members studied, total minutes, how many hit
+  // 3+ days, plus a per-member grid with this week's day-by-day minutes.
+  // A day "counts" at >= 5 minutes so a quick peek isn't an active day.
+  async getCohortRetention(weeks = 6) {
+    const ACTIVE_DAY_SEC = 300;
+    const IST_MS = 5.5 * 3600 * 1000;
+    const dayKey = (d: Date) =>
+      new Date(d.getTime() + IST_MS).toISOString().slice(0, 10);
+    const shift = (key: string, n: number) => {
+      const d = new Date(key + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const today = dayKey(new Date());
+    const dow = (new Date(today + 'T12:00:00Z').getUTCDay() + 6) % 7;
+    const thisWeek = shift(today, -dow);
+    const weekStarts = Array.from({ length: weeks }, (_, i) =>
+      shift(thisWeek, -7 * (weeks - 1 - i)),
+    );
+    const from = weekStarts[0];
+    const weekOf = (day: string) =>
+      weekStarts.filter((w) => w <= day).pop() ?? null;
+
+    const rows = await this.prisma.cohortStudyDay.findMany({
+      where: { day: { gte: from } },
+      select: { cohortId: true, userId: true, day: true, seconds: true },
+    });
+    const cohortIds = [...new Set(rows.map((r) => r.cohortId))];
+    if (!cohortIds.length) return { weekStarts, thisWeek, today, cohorts: [] };
+
+    const cohorts = await this.prisma.cohort.findMany({
+      where: { id: { in: cohortIds } },
+      select: {
+        id: true,
+        name: true,
+        syncMode: true,
+        visibility: true,
+        createdAt: true,
+        members: {
+          select: {
+            userId: true,
+            joinedAt: true,
+            user: { select: { name: true, email: true } },
+          },
+        },
+      },
+    });
+
+    const thisWeekDays = Array.from({ length: 7 }, (_, i) =>
+      shift(thisWeek, i),
+    );
+    const result = cohorts.map((c) => {
+      const mine = rows.filter((r) => r.cohortId === c.id);
+      const members = c.members.map((m) => {
+        const my = mine.filter((r) => r.userId === m.userId);
+        const perWeek = weekStarts.map((w) => {
+          const inWeek = my.filter((r) => weekOf(r.day) === w);
+          return {
+            days: inWeek.filter((r) => r.seconds >= ACTIVE_DAY_SEC).length,
+            minutes: Math.round(inWeek.reduce((a, r) => a + r.seconds, 0) / 60),
+          };
+        });
+        const daily = thisWeekDays.map((d) => {
+          const r = my.find((x) => x.day === d);
+          return { day: d, minutes: r ? Math.round(r.seconds / 60) : 0 };
+        });
+        const lastDay =
+          my
+            .filter((r) => r.seconds >= ACTIVE_DAY_SEC)
+            .map((r) => r.day)
+            .sort()
+            .pop() ?? null;
+        return {
+          userId: m.userId,
+          name: m.user?.name || m.user?.email || 'Member',
+          joinedAt: m.joinedAt,
+          perWeek,
+          daily,
+          lastActiveDay: lastDay,
+        };
+      });
+      const perWeek = weekStarts.map((w, i) => ({
+        weekStart: w,
+        partial: w === thisWeek,
+        activeMembers: members.filter((m) => m.perWeek[i].days > 0).length,
+        threePlusDays: members.filter((m) => m.perWeek[i].days >= 3).length,
+        minutes: members.reduce((a, m) => a + m.perWeek[i].minutes, 0),
+      }));
+      return {
+        id: c.id,
+        name: c.name,
+        syncMode: c.syncMode,
+        visibility: c.visibility,
+        memberCount: c.members.length,
+        perWeek,
+        members: members.sort(
+          (a, b) => b.perWeek[weeks - 1].minutes - a.perWeek[weeks - 1].minutes,
+        ),
+      };
+    });
+    result.sort(
+      (a, b) =>
+        b.perWeek[weeks - 1].activeMembers -
+          a.perWeek[weeks - 1].activeMembers ||
+        b.perWeek[weeks - 1].minutes - a.perWeek[weeks - 1].minutes,
+    );
+    return { weekStarts, thisWeek, today, cohorts: result };
+  }
 }

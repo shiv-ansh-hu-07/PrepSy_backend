@@ -62,6 +62,15 @@ export class AnalyticsController {
     return this.svc.getSummary();
   }
 
+  // Cohort retention: weekly active members / minutes / 3+ day members, and a
+  // per-member grid. Same founder-only gate.
+  @Get('cohorts')
+  @UseGuards(JwtAuthGuard)
+  cohorts(@Req() req: RequestWithUser) {
+    this.assertFounder(req);
+    return this.svc.getCohortRetention();
+  }
+
   // Per-tester activity table — the September view.
   @Get('testers')
   @UseGuards(JwtAuthGuard)
