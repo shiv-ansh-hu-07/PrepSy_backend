@@ -35,7 +35,10 @@ export class PlannerService {
         : err instanceof Error
           ? err.message
           : 'AI service unavailable';
-    return new InternalServerErrorException(`${what}: ${detail}`);
+    // The AI service already prefixes its own errors ("Plan generation failed: …").
+    return new InternalServerErrorException(
+      detail.startsWith(what) ? detail : `${what}: ${detail}`,
+    );
   }
 
   private cleanChat(messages: unknown): ChatTurn[] {
