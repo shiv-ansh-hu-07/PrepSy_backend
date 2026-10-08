@@ -537,3 +537,19 @@ model CohortStudyDay {
   @@unique([cohortId, userId, day])
   @@index([cohortId, day])
 }
+
+// AI study planner: the chat intake, the answers it collected and the generated
+// week-by-week schedule. progress = { [topicId]: true } for ticked topics.
+model StudyPlan {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  profile   Json     @default("{}")
+  plan      Json     @default("{}")
+  chat      Json     @default("[]")
+  progress  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}

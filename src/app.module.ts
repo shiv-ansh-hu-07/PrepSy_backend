@@ -20,6 +20,7 @@ import { CohortsModule } from './cohorts/cohorts.module';
 import { FriendsModule } from './friends/friends.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ContactModule } from './contact/contact.module';
+import { PlannerModule } from './planner/planner.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
@@ -39,6 +40,7 @@ import { HealthController } from './health/health.controller';
     FriendsModule,
     AnalyticsModule,
     ContactModule,
+    PlannerModule,
     ScheduleModule.forRoot(),
     // Global rate limiting. The default is deliberately generous so normal
     // browsing (and a whole cohort behind one campus NAT) is never throttled;
