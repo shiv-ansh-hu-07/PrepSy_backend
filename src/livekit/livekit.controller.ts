@@ -73,6 +73,7 @@ export class LivekitController {
         youtubePlaylistId: true,
         tags: true,
         femaleOnly: true,
+        ownerId: true,
       },
     });
 
@@ -84,11 +85,23 @@ export class LivekitController {
       roomRecord.youtubeVideoId || roomRecord.youtubePlaylistId,
     );
 
+    // Scheduled rooms open 15 minutes early (the reminder email goes out then,
+    // with a join link). The room's creator can always enter — to set up or
+    // study before the session. Previously even the creator was locked out.
+    const EARLY_ENTRY_MS = 15 * 60_000;
+    const requesterId = req?.user?.id || req?.user?.sub || null;
     const now = new Date();
-    if (roomRecord.startTime && now < roomRecord.startTime && !isWatchParty) {
+    if (
+      roomRecord.startTime &&
+      !isWatchParty &&
+      requesterId !== roomRecord.ownerId &&
+      now.getTime() < roomRecord.startTime.getTime() - EARLY_ENTRY_MS
+    ) {
+      const opensAt = new Date(roomRecord.startTime.getTime() - EARLY_ENTRY_MS);
       return res.status(403).json({
-        error: 'This classroom has not started yet.',
+        error: 'This room opens 15 minutes before it starts.',
         startTime: roomRecord.startTime.toISOString(),
+        opensAt: opensAt.toISOString(),
       });
     }
 

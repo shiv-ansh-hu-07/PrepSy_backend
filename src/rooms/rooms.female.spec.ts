@@ -76,14 +76,12 @@ describe('women-only rooms', () => {
     const run = async (gender: string | null, reqUser: any) => {
       const prisma: any = {
         room: {
-          findUnique: jest
-            .fn()
-            .mockResolvedValue({
-              roomId: 'r1',
-              name: 'R',
-              startTime: null,
-              femaleOnly: true,
-            }),
+          findUnique: jest.fn().mockResolvedValue({
+            roomId: 'r1',
+            name: 'R',
+            startTime: null,
+            femaleOnly: true,
+          }),
         },
         userProfile: profileFor(gender),
         user: {
@@ -109,5 +107,51 @@ describe('women-only rooms', () => {
     expect(await run(null, undefined)).toBe(403);
     expect(await run('woman', { sub: 'u1' })).toBe(200);
     process.env = OLD;
+  });
+});
+
+describe('scheduled room entry', () => {
+  const run = async (startInMin: number, reqUser: any) => {
+    const OLD = { ...process.env };
+    process.env.LIVEKIT_API_KEY = 'k';
+    process.env.LIVEKIT_API_SECRET = 'secret-secret-secret-secret-12345';
+    process.env.LIVEKIT_WS_URL = 'wss://example.livekit.cloud';
+    const prisma: any = {
+      room: {
+        findUnique: jest.fn().mockResolvedValue({
+          roomId: 'r1',
+          name: 'R',
+          ownerId: 'owner',
+          femaleOnly: false,
+          startTime: new Date(Date.now() + startInMin * 60000),
+        }),
+      },
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'x', name: 'A', email: 'a@x' }),
+      },
+    };
+    const ctrl = new LivekitController(prisma);
+    (ctrl as any).getRoomServiceClient = () => ({
+      listRooms: jest.fn().mockResolvedValue([{}]),
+      listParticipants: jest.fn().mockResolvedValue([]),
+    });
+    let status = 200;
+    const res: any = {
+      status: (c: number) => ((status = c), res),
+      json: () => res,
+    };
+    await ctrl.getToken({ user: reqUser } as any, 'r1', 'x', 'X', res);
+    process.env = OLD;
+    return status;
+  };
+  it('the creator can always enter early', async () => {
+    expect(await run(180, { sub: 'owner' })).toBe(200);
+  });
+  it('others can enter from 15 minutes before the start', async () => {
+    expect(await run(180, { sub: 'someone' })).toBe(403);
+    expect(await run(10, { sub: 'someone' })).toBe(200);
+    expect(await run(-5, undefined)).toBe(200);
   });
 });
