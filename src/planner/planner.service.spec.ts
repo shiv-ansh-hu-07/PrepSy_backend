@@ -89,45 +89,124 @@ describe('PlannerService', () => {
 });
 
 describe('PlannerService room plans', () => {
+  const today = new Date(Date.now() + 5.5 * 3600 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const shift = (n: number) =>
+    new Date(new Date(today + 'T12:00:00Z').getTime() + n * 86400000)
+      .toISOString()
+      .slice(0, 10);
+  // Week 1 already finished, week 2 is this week.
   const plan = {
-    meta: { startDate: '2026-10-01', deadline: '2026-10-28' },
-    weeks: [{ startDate: '2026-10-01', endDate: '2026-10-07', topics: [] }],
+    meta: { startDate: shift(-7), deadline: shift(6) },
+    weeks: [
+      {
+        startDate: shift(-7),
+        endDate: shift(-1),
+        topics: [{ id: 'w1t1' }, { id: 'w1t2' }],
+      },
+      {
+        startDate: shift(0),
+        endDate: shift(6),
+        topics: [{ id: 'w2t1' }, { id: 'w2t2' }],
+      },
+    ],
   };
-  const build = (planOwner: string, roomLinked: boolean) => {
+  const build = (
+    planOwner: string,
+    roomLinked: boolean,
+    memberRows: any[] = [],
+  ) => {
     const prisma: any = {
       room: {
-        findUnique: jest.fn().mockResolvedValue({ studyPlanId: 'p1' }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ studyPlanId: 'p1', name: 'R' }),
         findFirst: jest.fn().mockResolvedValue(roomLinked ? { id: 'r' } : null),
       },
       studyPlan: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValue({
-            id: 'p1',
-            userId: planOwner,
-            title: 'T',
-            plan,
-            profile: {},
-            progress: { w1t1: true },
-          }),
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'p1',
+          userId: planOwner,
+          title: 'T',
+          plan,
+          profile: {},
+          progress: { w1t1: true, w1t2: true },
+        }),
         count: jest.fn().mockResolvedValue(0),
         create: jest.fn(({ data }) => Promise.resolve({ id: 'p2', ...data })),
+        update: jest.fn(({ data }) => Promise.resolve({ id: 'p1', ...data })),
+      },
+      planRoomMember: {
+        findMany: jest.fn().mockResolvedValue(memberRows),
+        findUnique: jest.fn().mockResolvedValue(memberRows[0] || null),
+        upsert: jest.fn(({ create, update }) =>
+          Promise.resolve({ progress: update?.progress ?? create.progress }),
+        ),
+      },
+      roomMember: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ userId: 'member', joinedAt: new Date() }]),
+      },
+      roomAttendance: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            {
+              userId: 'member',
+              joinedAt: new Date(Date.now() - 90 * 60000),
+              leftAt: new Date(Date.now() - 30 * 60000),
+            },
+          ]),
+      },
+      user: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'owner', name: 'Owner', email: 'o@x' },
+          { id: 'member', name: 'Mem', email: 'm@x' },
+        ]),
       },
     };
     return { prisma, svc: new PlannerService(prisma) };
   };
 
-  it("shows a room's plan, owner-aware", async () => {
+  it("shows the room's plan with each viewer's own progress and the crew", async () => {
     const owner: any = await build('owner', true).svc.getRoomPlan(
       'owner',
       'r1',
     );
     expect(owner.isOwner).toBe(true);
-    const member: any = await build('owner', true).svc.getRoomPlan(
-      'member',
-      'r1',
-    );
+    expect(owner.progress).toEqual({ w1t1: true, w1t2: true });
+    const member: any = await build('owner', true, [
+      { userId: 'member', progress: { w2t1: true } },
+    ]).svc.getRoomPlan('member', 'r1');
     expect(member.isOwner).toBe(false);
+    expect(member.progress).toEqual({ w2t1: true });
+    const mem = member.crew.find((c: any) => c.userId === 'member');
+    expect(mem).toMatchObject({
+      weekDone: 1,
+      weekTotal: 2,
+      done: 1,
+      total: 4,
+      behindTopics: 2,
+      minutesThisWeek: 60,
+      isMe: true,
+    });
+    const own = member.crew.find((c: any) => c.userId === 'owner');
+    expect(own).toMatchObject({ behindTopics: 0, percent: 50 });
+  });
+
+  it('stores a member tick on their own row, the owner tick on the plan', async () => {
+    const m = build('owner', true);
+    await m.svc.setRoomTopicDone('member', 'r1', 'w2t2', true);
+    expect(m.prisma.planRoomMember.upsert).toHaveBeenCalled();
+    expect(m.prisma.studyPlan.update).not.toHaveBeenCalled();
+    const o = build('owner', true);
+    await o.svc.setRoomTopicDone('owner', 'r1', 'w2t2', true);
+    expect(o.prisma.studyPlan.update).toHaveBeenCalled();
+    await expect(
+      o.svc.setRoomTopicDone('member', 'r1', 'w9t9', true),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('copies a room plan re-dated to today with fresh progress', async () => {
@@ -136,11 +215,8 @@ describe('PlannerService room plans', () => {
     const data = prisma.studyPlan.create.mock.calls[0][0].data;
     expect(data.userId).toBe('member');
     expect(data.progress).toEqual({});
-    const today = new Date(Date.now() + 5.5 * 3600 * 1000)
-      .toISOString()
-      .slice(0, 10);
     expect(data.plan.meta.startDate).toBe(today);
-    expect(data.plan.weeks[0].startDate).toBe(today);
+    expect(data.plan.weeks[1].startDate).toBe(shift(7));
   });
 
   it("won't copy a private plan that no room shares", async () => {

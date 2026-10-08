@@ -185,12 +185,153 @@ export class PlannerService {
     return updated;
   }
 
-  // The plan a room follows (rooms created via "Create a room for this
-  // plan"). Anyone in the room sees it; only the owner ticks topics.
+  // The plan a room follows (rooms created via "Create my own study room").
+  // Works like a cohort: everyone in the room tracks their own progress
+  // against the plan, and the room shows the whole crew's progress.
   async getRoomPlan(userId: string, roomId: string) {
+    const ctx = await this.roomPlanContext(roomId);
+    if (!ctx) return null;
+    const { room, plan } = ctx;
+    const isOwner = plan.userId === userId;
+
+    const [memberRows, roomMembers, attendance] = await Promise.all([
+      this.prisma.planRoomMember.findMany({ where: { roomId } }),
+      this.prisma.roomMember.findMany({
+        where: { roomId },
+        select: { userId: true, joinedAt: true },
+      }),
+      this.prisma.roomAttendance.findMany({
+        where: { roomId, joinedAt: { gte: this.weekStartUtc() } },
+        select: { userId: true, joinedAt: true, leftAt: true },
+      }),
+    ]);
+
+    // Crew = plan owner + anyone who joined the room or ticked a topic.
+    const ids = new Set<string>([plan.userId]);
+    roomMembers.forEach((m) => ids.add(m.userId));
+    memberRows.forEach((m) => ids.add(m.userId));
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, name: true, email: true },
+    });
+    const nameOf = new Map(
+      users.map((u) => [u.id, u.name || u.email.split('@')[0]]),
+    );
+
+    const weeks = this.weeksOf(plan.plan);
+    const today = this.todayIst();
+    const curIdx = weeks.findIndex(
+      (w) => today >= w.startDate && today <= w.endDate,
+    );
+    const pastIdx =
+      curIdx >= 0
+        ? curIdx
+        : today > (weeks[weeks.length - 1]?.endDate ?? '')
+          ? weeks.length
+          : 0;
+    const allTopics = weeks.flatMap((w) => w.topicIds);
+    const weekTopics = curIdx >= 0 ? weeks[curIdx].topicIds : [];
+    // Where you "should" be: all topics of the weeks already finished.
+    const expectedTopics = weeks.slice(0, pastIdx).flatMap((w) => w.topicIds);
+
+    const progressOf = (uid: string): Record<string, boolean> => {
+      if (uid === plan.userId) return this.asProgress(plan.progress);
+      return this.asProgress(
+        memberRows.find((m) => m.userId === uid)?.progress,
+      );
+    };
+    const minutesOf = (uid: string) => {
+      const now = Date.now();
+      return Math.round(
+        attendance
+          .filter((a) => a.userId === uid)
+          .reduce((sum, a) => {
+            const end = a.leftAt
+              ? a.leftAt.getTime()
+              : Math.min(now, a.joinedAt.getTime() + 3 * 3600_000);
+            return (
+              sum +
+              Math.min(4 * 3600_000, Math.max(0, end - a.joinedAt.getTime()))
+            );
+          }, 0) / 60_000,
+      );
+    };
+
+    const crew = [...ids]
+      .map((uid) => {
+        const prog = progressOf(uid);
+        const done = allTopics.filter((t) => prog[t]).length;
+        const expectedDone = expectedTopics.filter((t) => prog[t]).length;
+        return {
+          userId: uid,
+          name: nameOf.get(uid) || 'Member',
+          isOwner: uid === plan.userId,
+          isMe: uid === userId,
+          weekDone: weekTopics.filter((t) => prog[t]).length,
+          weekTotal: weekTopics.length,
+          done,
+          total: allTopics.length,
+          percent: allTopics.length
+            ? Math.round((done / allTopics.length) * 100)
+            : 0,
+          // Topics from finished weeks still open → behind.
+          behindTopics: expectedTopics.length - expectedDone,
+          minutesThisWeek: minutesOf(uid),
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.percent - a.percent || b.minutesThisWeek - a.minutesThisWeek,
+      );
+
+    return {
+      id: plan.id,
+      title: plan.title,
+      plan: plan.plan,
+      // The viewer's own ticks (owner: the plan's own progress).
+      progress: progressOf(userId),
+      isOwner,
+      roomName: room.name,
+      crew,
+    };
+  }
+
+  // Tick/untick a topic for ME in a plan room (owner → the plan itself).
+  async setRoomTopicDone(
+    userId: string,
+    roomId: string,
+    topicId: string,
+    done: boolean,
+  ) {
+    const ctx = await this.roomPlanContext(roomId);
+    if (!ctx) throw new NotFoundException('This room has no plan');
+    const known = new Set(
+      this.weeksOf(ctx.plan.plan).flatMap((w) => w.topicIds),
+    );
+    if (typeof topicId !== 'string' || !known.has(topicId)) {
+      throw new BadRequestException('Invalid topic');
+    }
+    if (ctx.plan.userId === userId) {
+      return this.setTopicDone(userId, ctx.plan.id, topicId, done);
+    }
+    const row = await this.prisma.planRoomMember.findUnique({
+      where: { roomId_userId: { roomId, userId } },
+    });
+    const progress = { ...this.asProgress(row?.progress) };
+    if (done) progress[topicId] = true;
+    else delete progress[topicId];
+    return this.prisma.planRoomMember.upsert({
+      where: { roomId_userId: { roomId, userId } },
+      create: { roomId, userId, progress },
+      update: { progress },
+      select: { progress: true },
+    });
+  }
+
+  private async roomPlanContext(roomId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
-      select: { studyPlanId: true },
+      select: { studyPlanId: true, name: true },
     });
     if (!room?.studyPlanId) return null;
     const plan = await this.prisma.studyPlan.findUnique({
@@ -203,14 +344,45 @@ export class PlannerService {
         progress: true,
       },
     });
-    if (!plan) return null;
-    return {
-      id: plan.id,
-      title: plan.title,
-      plan: plan.plan,
-      progress: plan.progress,
-      isOwner: plan.userId === userId,
-    };
+    return plan ? { room, plan } : null;
+  }
+
+  private asProgress(v: unknown): Record<string, boolean> {
+    return v && typeof v === 'object' && !Array.isArray(v)
+      ? (v as Record<string, boolean>)
+      : {};
+  }
+
+  private weeksOf(plan: unknown) {
+    const weeks = (plan as { weeks?: unknown[] } | null)?.weeks;
+    if (!Array.isArray(weeks)) return [];
+    return weeks.map((w) => {
+      const wk = (w || {}) as {
+        startDate?: string;
+        endDate?: string;
+        topics?: { id?: string }[];
+      };
+      return {
+        startDate: String(wk.startDate || ''),
+        endDate: String(wk.endDate || ''),
+        topicIds: (Array.isArray(wk.topics) ? wk.topics : [])
+          .map((t) => t?.id)
+          .filter((x): x is string => typeof x === 'string'),
+      };
+    });
+  }
+
+  // Monday 00:00 IST of this week, as a UTC Date.
+  private weekStartUtc() {
+    const IST = 5.5 * 3600_000;
+    const ist = new Date(Date.now() + IST);
+    const dow = (ist.getUTCDay() + 6) % 7;
+    const mondayIst = Date.UTC(
+      ist.getUTCFullYear(),
+      ist.getUTCMonth(),
+      ist.getUTCDate() - dow,
+    );
+    return new Date(mondayIst - IST);
   }
 
   // Copy a plan into my planner, re-dated to start today. Allowed for my own

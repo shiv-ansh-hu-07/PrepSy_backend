@@ -557,3 +557,17 @@ model StudyPlan {
 
   @@index([userId, createdAt])
 }
+
+// Per-member progress in a room that follows a study plan (Room.studyPlanId).
+// The plan owner's ticks stay on StudyPlan.progress; everyone else's live here,
+// so the room can show the whole crew's progress like a cohort.
+model PlanRoomMember {
+  id       String   @id @default(cuid())
+  roomId   String
+  userId   String
+  progress Json     @default("{}")
+  joinedAt DateTime @default(now())
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+}

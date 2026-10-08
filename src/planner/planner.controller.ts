@@ -69,6 +69,22 @@ export class PlannerController {
     return this.planner.getRoomPlan(this.uid(req), roomId);
   }
 
+  // Tick a topic for me in a plan room (everyone tracks their own progress).
+  @Patch('by-room/:roomId/progress')
+  roomProgress(
+    @Req() req: RequestWithUser,
+    @Param('roomId') roomId: string,
+    @Body('topicId') topicId: string,
+    @Body('done') done: boolean,
+  ) {
+    return this.planner.setRoomTopicDone(
+      this.uid(req),
+      roomId,
+      topicId,
+      done === true,
+    );
+  }
+
   @Post('plans/:id/copy')
   copy(@Req() req: RequestWithUser, @Param('id') id: string) {
     return this.planner.copyPlan(this.uid(req), id);
