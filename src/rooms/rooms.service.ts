@@ -27,6 +27,7 @@ export class RoomsService {
     id: true,
     roomId: true,
     name: true,
+    femaleOnly: true,
     description: true,
     tags: true,
     ownerId: true,
@@ -440,6 +441,11 @@ export class RoomsService {
     if (!name?.trim()) {
       throw new BadRequestException('Room name is required');
     }
+    if (femaleOnly && !(await this.isFemaleUser(userId))) {
+      throw new ForbiddenException(
+        'Only women can create women-only rooms (set your gender in your profile).',
+      );
+    }
     // A room can follow one of the creator's own study plans.
     let linkedPlanId: string | null = null;
     if (studyPlanId) {
@@ -552,13 +558,29 @@ export class RoomsService {
     };
   }
 
+  // Women-only rooms are visible to — and enterable by — women only, based on
+  // the gender on their profile ("woman"). Guests and everyone else: no.
+  async isFemaleUser(userId?: string | null) {
+    if (!userId) return false;
+    const p = await this.prisma.userProfile.findUnique({
+      where: { userId },
+      select: { gender: true },
+    });
+    return RoomsService.isFemaleGender(p?.gender);
+  }
+
+  static isFemaleGender(gender?: string | null) {
+    return /^\s*(woman|women|female|girl)\b/i.test(gender ?? '');
+  }
+
   // Public rooms plus the caller's own/joined rooms — never other people's
   // private rooms (their roomId is the invite link, so listing it leaks access).
   async getRooms(userId: string) {
+    const female = await this.isFemaleUser(userId);
     const rooms = await this.prisma.room.findMany({
       where: {
         OR: [
-          { visibility: 'PUBLIC' },
+          { visibility: 'PUBLIC', ...(female ? {} : { femaleOnly: false }) },
           { ownerId: userId },
           { members: { some: { userId } } },
         ],
@@ -586,12 +608,15 @@ export class RoomsService {
     }));
   }
 
-  async getPublicRooms() {
+  async getPublicRooms(userId?: string | null) {
+    const female = await this.isFemaleUser(userId);
     // Fetch ALL public rooms (not just scheduled ones) so that instant/live
     // rooms without a startTime can still surface while people are in them.
     const rooms = await this.prisma.room.findMany({
       where: {
         visibility: 'PUBLIC',
+        // Women-only rooms are invisible to everyone else (incl. guests).
+        ...(female ? {} : { femaleOnly: false }),
       },
       select: this.roomListSelect,
       orderBy: {
@@ -771,12 +796,13 @@ export class RoomsService {
   // case-insensitively and by substring, expand common synonyms (DSA ↔ data
   // structures/algorithms…), rank name hits first, and apply the same
   // "visible right now" rule + cohort flag as the public list.
-  async searchRooms(query: string) {
+  async searchRooms(query: string, userId?: string | null) {
     const terms = this.searchTerms(query);
     if (!terms.length) return { rooms: [] };
+    const female = await this.isFemaleUser(userId);
 
     const rooms = await this.prisma.room.findMany({
-      where: { visibility: 'PUBLIC' },
+      where: { visibility: 'PUBLIC', ...(female ? {} : { femaleOnly: false }) },
       select: { ...this.roomListSelect, description: true },
       orderBy: { createdAt: 'desc' },
       take: 500,
@@ -982,6 +1008,9 @@ export class RoomsService {
 
     if (!room) {
       throw new NotFoundException('Room not found');
+    }
+    if (room.femaleOnly && !(await this.isFemaleUser(userId))) {
+      throw new ForbiddenException('This room is for women only.');
     }
 
     const exists = await this.prisma.roomMember.findFirst({

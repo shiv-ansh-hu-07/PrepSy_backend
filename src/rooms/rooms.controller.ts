@@ -79,8 +79,11 @@ export class RoomsController {
 
   @Public()
   @Get('public')
-  getPublicRooms() {
-    return this.roomsService.getPublicRooms();
+  getPublicRooms(@Req() req: RequestWithUser) {
+    // Optional login: lets women see women-only rooms; everyone else doesn't.
+    return this.roomsService.getPublicRooms(
+      req?.user?.id || req?.user?.sub || null,
+    );
   }
 
   @Get('my')
@@ -142,8 +145,12 @@ export class RoomsController {
 
   // Free text: ?q=… (or the older ?tags=a,b). Matches name/description/tags.
   @Get('search')
-  searchRooms(@Query('q') q?: string, @Query('tags') tags?: string) {
-    return this.roomsService.searchRooms(q || tags || '');
+  searchRooms(
+    @Req() req: RequestWithUser,
+    @Query('q') q?: string,
+    @Query('tags') tags?: string,
+  ) {
+    return this.roomsService.searchRooms(q || tags || '', this.getUserId(req));
   }
 
   @Delete(':roomId')

@@ -72,6 +72,7 @@ export class LivekitController {
         youtubeVideoId: true,
         youtubePlaylistId: true,
         tags: true,
+        femaleOnly: true,
       },
     });
 
@@ -92,6 +93,20 @@ export class LivekitController {
     }
 
     const authedId = req?.user?.id || req?.user?.sub || null;
+
+    // Women-only rooms: signed-in women only (by profile gender). Guests and
+    // everyone else can't get a token, so they can't enter even with the link.
+    if (roomRecord.femaleOnly) {
+      const profile = authedId
+        ? await this.prisma.userProfile.findUnique({
+            where: { userId: authedId },
+            select: { gender: true },
+          })
+        : null;
+      if (!/^\s*(woman|women|female|girl)\b/i.test(profile?.gender ?? '')) {
+        return res.status(403).json({ error: 'This room is for women only.' });
+      }
+    }
     let identity: string;
     let displayName: string;
     if (authedId) {

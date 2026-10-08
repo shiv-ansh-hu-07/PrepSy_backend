@@ -9,16 +9,23 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  async canActivate(context: ExecutionContext) {
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
 
     if (isPublic) {
+      // Public routes never require a login, but still learn who's asking
+      // when a valid token is sent (e.g. to hide women-only rooms from men).
+      try {
+        await super.canActivate(context);
+      } catch {
+        /* anonymous is fine */
+      }
       return true;
     }
 
-    return super.canActivate(context);
+    return (await super.canActivate(context)) as boolean;
   }
 }
