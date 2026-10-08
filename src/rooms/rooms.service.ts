@@ -387,7 +387,9 @@ export class RoomsService {
 
     if (!roomService || rooms.length === 0) {
       if (!roomService) {
-        console.warn('[LiveKit] No credentials configured — activeUsers will be 0 for all rooms');
+        console.warn(
+          '[LiveKit] No credentials configured — activeUsers will be 0 for all rooms',
+        );
       }
       return rooms.map((room) => ({ ...room, activeUsers: 0 }));
     }
@@ -406,7 +408,10 @@ export class RoomsService {
         activeUsers: activeUsersByRoom.get(room.roomId) ?? 0,
       }));
     } catch (error) {
-      console.error('[LiveKit] listRooms failed — activeUsers will be 0:', error instanceof Error ? error.message : error);
+      console.error(
+        '[LiveKit] listRooms failed — activeUsers will be 0:',
+        error instanceof Error ? error.message : error,
+      );
       return rooms.map((room) => ({ ...room, activeUsers: 0 }));
     }
   }
@@ -643,13 +648,18 @@ export class RoomsService {
     });
 
     const eligible = rooms.filter(
-      (r) => !myRoomIds.has(r.roomId) && r.ownerId !== userId && (!r.femaleOnly || isFemale),
+      (r) =>
+        !myRoomIds.has(r.roomId) &&
+        r.ownerId !== userId &&
+        (!r.femaleOnly || isFemale),
     );
     const withCounts = await this.attachActiveUserCounts(eligible);
 
     const scored = withCounts.map((r) => {
       const tagMatch = norm(r.tags).filter((t) => signals.has(t)).length;
-      const langMatch = norm(r.preferredLanguages).filter((l) => myLangs.has(l)).length;
+      const langMatch = norm(r.preferredLanguages).filter((l) =>
+        myLangs.has(l),
+      ).length;
       const collab =
         r.collaborationStyle &&
         profile?.collaborationPreference &&
@@ -701,7 +711,9 @@ export class RoomsService {
 
     const apiKey = process.env.YOUTUBE_API_KEY;
     if (!apiKey) {
-      this.logger.warn('YOUTUBE_API_KEY not configured, skipping video summary');
+      this.logger.warn(
+        'YOUTUBE_API_KEY not configured, skipping video summary',
+      );
       return { summary: null, tags: room.tags };
     }
 
@@ -735,27 +747,154 @@ export class RoomsService {
       return { summary: summary || null, tags: room.tags };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      this.logger.warn(`Video summary generation failed for ${roomId}: ${message}`);
+      this.logger.warn(
+        `Video summary generation failed for ${roomId}: ${message}`,
+      );
       return { summary: null, tags: room.tags };
     }
   }
 
-  async searchRoomsByTags(tags: string[]) {
-    if (!tags || tags.length === 0) {
-      return { rooms: [] };
-    }
+  // Free-text room search. Matching only exact tags missed most rooms: cohort
+  // rooms have no tags at all, their topic lives in the name ("Java + DSA +
+  // Interview Preparation…"). So match name, description and tags,
+  // case-insensitively and by substring, expand common synonyms (DSA ↔ data
+  // structures/algorithms…), rank name hits first, and apply the same
+  // "visible right now" rule + cohort flag as the public list.
+  async searchRooms(query: string) {
+    const terms = this.searchTerms(query);
+    if (!terms.length) return { rooms: [] };
 
     const rooms = await this.prisma.room.findMany({
-      where: {
-        visibility: 'PUBLIC',
-        tags: {
-          hasSome: tags,
-        },
-      },
-      select: this.roomListSelect,
+      where: { visibility: 'PUBLIC' },
+      select: { ...this.roomListSelect, description: true },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
     });
 
-    return { rooms: await this.attachActiveUserCounts(rooms) };
+    const scored = rooms
+      .map((room) => {
+        const name = room.name.toLowerCase();
+        const desc = (room.description || '').toLowerCase();
+        const tags = (room.tags || []).map((t) => t.toLowerCase());
+        let score = 0;
+        for (const group of terms) {
+          // A query term matches if ANY of its synonyms does.
+          const inName = group.some((t) => this.hasTerm(name, t));
+          const inTags = group.some((t) =>
+            tags.some((tag) => this.hasTerm(tag, t)),
+          );
+          const inDesc = group.some((t) => this.hasTerm(desc, t));
+          score += inName ? 3 : inTags ? 2 : inDesc ? 1 : 0;
+        }
+        return { room, score };
+      })
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const withCounts = await this.attachActiveUserCounts(
+      scored.map((r) => r.room),
+    );
+    const visible = withCounts.filter(
+      (room) => room.activeUsers > 0 || this.shouldShowPublicRoom(room),
+    );
+    return { rooms: await this.attachCohortFlag(visible) };
+  }
+
+  // Short terms (dsa, os, ml) must match as a whole word; longer ones may be
+  // part of a word ("algorithm" in "algorithms").
+  private hasTerm(text: string, term: string) {
+    if (term.length <= 3) {
+      return new RegExp(
+        `(^|[^a-z0-9])${term.replace(/[^a-z0-9 ]/g, '')}([^a-z0-9]|$)`,
+      ).test(text);
+    }
+    return text.includes(term);
+  }
+
+  private static readonly SYNONYMS: Record<string, string[]> = {
+    dsa: [
+      'dsa',
+      'data structure',
+      'algorithm',
+      'leetcode',
+      'competitive programming',
+    ],
+    'data structures': ['dsa', 'data structure', 'algorithm'],
+    algorithms: ['dsa', 'algorithm', 'data structure'],
+    'system design': [
+      'system design',
+      'hld',
+      'lld',
+      'low level design',
+      'high level design',
+    ],
+    'web dev': [
+      'web dev',
+      'web development',
+      'frontend',
+      'backend',
+      'full stack',
+      'react',
+      'javascript',
+      'mern',
+      'node',
+    ],
+    aptitude: ['aptitude', 'quant', 'reasoning', 'verbal'],
+    ml: ['ml', 'machine learning', 'deep learning', 'ai'],
+    dbms: ['dbms', 'database', 'sql'],
+    os: ['os', 'operating system'],
+    cn: ['cn', 'computer network', 'networking'],
+  };
+
+  private static readonly STOPWORDS = new Set([
+    'and',
+    'the',
+    'for',
+    'with',
+    'from',
+    'study',
+    'room',
+    'rooms',
+    'group',
+    'prep',
+    'preparation',
+    'course',
+    'learn',
+    'learning',
+    'basics',
+    'to',
+    'of',
+    'in',
+  ]);
+
+  // "DSA, system design" → [[dsa, data structure, …], [system design, hld, …]]
+  private searchTerms(query: string): string[][] {
+    const q = (query || '')
+      .toLowerCase()
+      .replace(/[+&/|]/g, ',')
+      .trim();
+    if (!q) return [];
+    const groups: string[][] = [];
+    const seen = new Set<string>();
+    const add = (term: string) => {
+      const t = term.trim();
+      if (!t || seen.has(t)) return;
+      seen.add(t);
+      groups.push(RoomsService.SYNONYMS[t] ?? [t]);
+    };
+    for (const part of q
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)) {
+      if (RoomsService.SYNONYMS[part]) {
+        add(part);
+        continue;
+      }
+      for (const w of part.split(/\s+/)) {
+        if (w.length >= 2 && !RoomsService.STOPWORDS.has(w)) add(w);
+      }
+    }
+    return groups.slice(0, 8);
   }
 
   async getMyRooms(userId: string) {

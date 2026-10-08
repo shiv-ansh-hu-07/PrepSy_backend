@@ -138,13 +138,10 @@ export class RoomsController {
     });
   }
 
+  // Free text: ?q=… (or the older ?tags=a,b). Matches name/description/tags.
   @Get('search')
-  searchRoomsByTags(@Query('tags') tags: string) {
-    const tagArray = tags
-      ? tags.split(',').map((t) => t.trim().toLowerCase())
-      : [];
-
-    return this.roomsService.searchRoomsByTags(tagArray);
+  searchRooms(@Query('q') q?: string, @Query('tags') tags?: string) {
+    return this.roomsService.searchRooms(q || tags || '');
   }
 
   @Delete(':roomId')
