@@ -185,8 +185,12 @@ export class FriendsService {
 
   async sendMessage(userId: string, recipientId: string, text: string, roomId?: string) {
     await this.assertFriends(userId, recipientId);
-    const body = (text || '').trim().slice(0, 4000);
-    if (!body) throw new BadRequestException('Message cannot be empty.');
+    // Keep indentation (pasted code): only drop blank edge lines + trailing space.
+    const body = (text || '')
+      .replace(/^\s*\n/, '')
+      .trimEnd()
+      .slice(0, 4000);
+    if (!body.trim()) throw new BadRequestException('Message cannot be empty.');
     const message = await this.prisma.directMessage.create({
       data: { senderId: userId, recipientId, text: body, roomId: roomId || null },
     });

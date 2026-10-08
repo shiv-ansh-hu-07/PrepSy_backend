@@ -10,8 +10,9 @@ export class MessagesService {
 
   async create(data: CreateMessageDto, userId: string | null) {
     const roomId = (data?.roomId || '').trim();
-    const text = (data?.text || '').trim();
-    if (!roomId || !text) {
+    // Keep indentation (pasted code): only drop blank edge lines + trailing space.
+    const text = (data?.text || '').replace(/^\s*\n/, '').trimEnd();
+    if (!roomId || !text.trim()) {
       throw new BadRequestException('roomId and text are required');
     }
 
