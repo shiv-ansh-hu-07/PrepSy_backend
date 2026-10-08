@@ -1294,6 +1294,129 @@ export class RoomsService {
     };
   }
 
+  // Details page for a normal room (like the cohort page): info, schedule,
+  // owner, live count, members with study stats from attendance, and whether
+  // it follows a study plan. Women-only rooms stay women-only here too.
+  async getRoomPage(roomId: string, userId: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      include: {
+        owner: { select: { id: true, name: true, email: true } },
+        members: {
+          include: { user: { select: { id: true, name: true, email: true } } },
+          orderBy: { joinedAt: 'asc' },
+        },
+      },
+    });
+    if (!room) throw new NotFoundException('Room not found');
+    if (room.femaleOnly && !(await this.isFemaleUser(userId))) {
+      throw new ForbiddenException('This room is for women only.');
+    }
+
+    const [withCount] = await this.attachActiveUserCounts([room]);
+    const [flagged] = await this.attachCohortFlag([room]);
+    const attendance = await this.prisma.roomAttendance.findMany({
+      where: { roomId },
+      select: { userId: true, joinedAt: true, leftAt: true },
+    });
+
+    const IST = 5.5 * 3600_000;
+    const ist = new Date(Date.now() + IST);
+    const dow = (ist.getUTCDay() + 6) % 7;
+    const weekStart =
+      Date.UTC(
+        ist.getUTCFullYear(),
+        ist.getUTCMonth(),
+        ist.getUTCDate() - dow,
+      ) - IST;
+    const now = Date.now();
+    const rowMinutes = (a: { joinedAt: Date; leftAt: Date | null }) => {
+      const end = a.leftAt
+        ? a.leftAt.getTime()
+        : Math.min(now, a.joinedAt.getTime() + 3 * 3600_000);
+      return Math.min(240, Math.max(0, (end - a.joinedAt.getTime()) / 60_000));
+    };
+
+    const people = new Map<string, { name: string; joinedAt: Date | null }>();
+    if (room.owner) {
+      people.set(room.owner.id, {
+        name: room.owner.name || room.owner.email.split('@')[0],
+        joinedAt: room.createdAt,
+      });
+    }
+    for (const m of room.members) {
+      if (!people.has(m.userId)) {
+        people.set(m.userId, {
+          name: m.user?.name || m.user?.email.split('@')[0] || 'Member',
+          joinedAt: m.joinedAt,
+        });
+      }
+    }
+
+    const members = [...people.entries()]
+      .map(([uid, p]) => {
+        const rows = attendance.filter((a) => a.userId === uid);
+        const total = rows.reduce((sum, a) => sum + rowMinutes(a), 0);
+        const week = rows
+          .filter((a) => a.joinedAt.getTime() >= weekStart)
+          .reduce((sum, a) => sum + rowMinutes(a), 0);
+        const last = rows.reduce<Date | null>(
+          (m, a) => (!m || a.joinedAt > m ? a.joinedAt : m),
+          null,
+        );
+        return {
+          userId: uid,
+          name: p.name,
+          isOwner: uid === room.ownerId,
+          isMe: uid === userId,
+          joinedAt: p.joinedAt,
+          minutesThisWeek: Math.round(week),
+          minutesTotal: Math.round(total),
+          sessions: rows.filter((a) => rowMinutes(a) >= 5).length,
+          lastActive: last ? last.toISOString() : null,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.minutesThisWeek - a.minutesThisWeek ||
+          b.minutesTotal - a.minutesTotal,
+      );
+
+    const meta = this.parseRecurrenceMeta(room.recurrenceType);
+    return {
+      roomId: room.roomId,
+      name: room.name,
+      description: room.description,
+      tags: room.tags,
+      visibility: room.visibility,
+      femaleOnly: room.femaleOnly,
+      collaborationStyle: room.collaborationStyle,
+      preferredLanguages: room.preferredLanguages,
+      startTime: room.startTime,
+      durationMinutes: room.durationMinutes,
+      isRecurring: room.isRecurring,
+      frequency: meta.frequency,
+      timeZone: meta.timeZone,
+      recurrenceEndDate: room.recurrenceEndDate,
+      createdAt: room.createdAt,
+      owner: room.owner
+        ? { id: room.owner.id, name: people.get(room.owner.id)?.name }
+        : null,
+      isOwner: room.ownerId === userId,
+      isMember: people.has(userId),
+      activeUsers: withCount?.activeUsers ?? 0,
+      isCohortRoom: flagged?.isCohortRoom ?? false,
+      cohortId: flagged?.cohortId ?? null,
+      studyPlanId: room.studyPlanId,
+      members,
+      totals: {
+        minutesThisWeek: members.reduce((a, m) => a + m.minutesThisWeek, 0),
+        minutesTotal: members.reduce((a, m) => a + m.minutesTotal, 0),
+        sessions: members.reduce((a, m) => a + m.sessions, 0),
+      },
+    };
+  }
+
   async getRoomDetails(roomId: string): Promise<RoomWithRelations> {
     const room = await this.prisma.room.findUnique({
       where: { roomId },

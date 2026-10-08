@@ -96,6 +96,12 @@ export class RoomsController {
     return this.roomsService.recommendedRooms(this.getUserId(req));
   }
 
+  // Details page for a normal room (info, schedule, members + study stats).
+  @Get(':roomId/details')
+  getRoomPage(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.roomsService.getRoomPage(roomId, this.getUserId(req));
+  }
+
   @Public()
   @Get(':roomId/video-summary')
   getVideoSummary(@Param('roomId') roomId: string) {
