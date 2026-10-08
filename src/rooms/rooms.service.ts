@@ -435,9 +435,19 @@ export class RoomsService {
     collaborationStyle?: string,
     youtubeVideoId?: string,
     youtubePlaylistId?: string,
+    studyPlanId?: string,
   ) {
     if (!name?.trim()) {
       throw new BadRequestException('Room name is required');
+    }
+    // A room can follow one of the creator's own study plans.
+    let linkedPlanId: string | null = null;
+    if (studyPlanId) {
+      const plan = await this.prisma.studyPlan.findUnique({
+        where: { id: studyPlanId },
+        select: { userId: true },
+      });
+      if (plan && plan.userId === userId) linkedPlanId = studyPlanId;
     }
 
     const normalizedTimeZone = timezone
@@ -500,6 +510,7 @@ export class RoomsService {
           collaborationStyle: collaborationStyle || 'quiet-focus',
           youtubeVideoId: youtubeVideoId || null,
           youtubePlaylistId: youtubePlaylistId || null,
+          studyPlanId: linkedPlanId,
           remindersent: false,
         },
       });

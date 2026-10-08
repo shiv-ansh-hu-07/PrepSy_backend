@@ -10,11 +10,23 @@ const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 const make = (over: any = {}) => {
   const prisma: any = {
-    userProfile: { findUnique: jest.fn().mockResolvedValue({ examTargets: ['GATE'], goals: [], skills: [], interests: [], dailyStudyGoalMinutes: 120 }) },
+    userProfile: {
+      findUnique: jest.fn().mockResolvedValue({
+        examTargets: ['GATE'],
+        goals: [],
+        skills: [],
+        interests: [],
+        dailyStudyGoalMinutes: 120,
+      }),
+    },
     studyPlan: {
       count: jest.fn().mockResolvedValue(0),
       create: jest.fn(({ data }) => Promise.resolve({ id: 'p1', ...data })),
-      findUnique: jest.fn().mockResolvedValue({ id: 'p1', userId: 'u1', progress: { w1t1: true } }),
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'p1',
+        userId: 'u1',
+        progress: { w1t1: true },
+      }),
       update: jest.fn(({ data }) => Promise.resolve({ id: 'p1', ...data })),
       delete: jest.fn().mockResolvedValue({}),
       findMany: jest.fn().mockResolvedValue([]),
@@ -43,17 +55,25 @@ describe('PlannerService', () => {
   });
 
   it('generates and stores a plan', async () => {
-    mockedAxios.post.mockResolvedValue({ data: { title: 'DSA in 8 weeks', weeks: [] } });
+    mockedAxios.post.mockResolvedValue({
+      data: { title: 'DSA in 8 weeks', weeks: [] },
+    });
     const { svc, prisma } = make();
-    const p: any = await svc.createPlan('u1', { subject: 'DSA' }, [{ role: 'user', content: 'hi' }]);
+    const p: any = await svc.createPlan('u1', { subject: 'DSA' }, [
+      { role: 'user', content: 'hi' },
+    ]);
     expect(p.title).toBe('DSA in 8 weeks');
     expect(prisma.studyPlan.create.mock.calls[0][0].data.userId).toBe('u1');
   });
 
   it("can't read or tick someone else's plan", async () => {
     const { svc } = make();
-    await expect(svc.getPlan('stranger', 'p1')).rejects.toBeInstanceOf(NotFoundException);
-    await expect(svc.setTopicDone('stranger', 'p1', 'w1t1', true)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(svc.getPlan('stranger', 'p1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    await expect(
+      svc.setTopicDone('stranger', 'p1', 'w1t1', true),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('ticks and unticks topics, rejecting bad ids', async () => {
@@ -62,6 +82,70 @@ describe('PlannerService', () => {
     expect(a.progress).toEqual({ w1t1: true, w2t3: true });
     const b: any = await svc.setTopicDone('u1', 'p1', 'w1t1', false);
     expect(b.progress).toEqual({});
-    await expect(svc.setTopicDone('u1', 'p1', '__proto__', true)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      svc.setTopicDone('u1', 'p1', '__proto__', true),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('PlannerService room plans', () => {
+  const plan = {
+    meta: { startDate: '2026-10-01', deadline: '2026-10-28' },
+    weeks: [{ startDate: '2026-10-01', endDate: '2026-10-07', topics: [] }],
+  };
+  const build = (planOwner: string, roomLinked: boolean) => {
+    const prisma: any = {
+      room: {
+        findUnique: jest.fn().mockResolvedValue({ studyPlanId: 'p1' }),
+        findFirst: jest.fn().mockResolvedValue(roomLinked ? { id: 'r' } : null),
+      },
+      studyPlan: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({
+            id: 'p1',
+            userId: planOwner,
+            title: 'T',
+            plan,
+            profile: {},
+            progress: { w1t1: true },
+          }),
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn(({ data }) => Promise.resolve({ id: 'p2', ...data })),
+      },
+    };
+    return { prisma, svc: new PlannerService(prisma) };
+  };
+
+  it("shows a room's plan, owner-aware", async () => {
+    const owner: any = await build('owner', true).svc.getRoomPlan(
+      'owner',
+      'r1',
+    );
+    expect(owner.isOwner).toBe(true);
+    const member: any = await build('owner', true).svc.getRoomPlan(
+      'member',
+      'r1',
+    );
+    expect(member.isOwner).toBe(false);
+  });
+
+  it('copies a room plan re-dated to today with fresh progress', async () => {
+    const { svc, prisma } = build('owner', true);
+    await svc.copyPlan('member', 'p1');
+    const data = prisma.studyPlan.create.mock.calls[0][0].data;
+    expect(data.userId).toBe('member');
+    expect(data.progress).toEqual({});
+    const today = new Date(Date.now() + 5.5 * 3600 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    expect(data.plan.meta.startDate).toBe(today);
+    expect(data.plan.weeks[0].startDate).toBe(today);
+  });
+
+  it("won't copy a private plan that no room shares", async () => {
+    await expect(
+      build('owner', false).svc.copyPlan('stranger', 'p1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

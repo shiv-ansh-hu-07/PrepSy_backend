@@ -64,6 +64,16 @@ export class PlannerController {
     return this.planner.setTopicDone(this.uid(req), id, topicId, done === true);
   }
 
+  @Get('by-room/:roomId')
+  roomPlan(@Req() req: RequestWithUser, @Param('roomId') roomId: string) {
+    return this.planner.getRoomPlan(this.uid(req), roomId);
+  }
+
+  @Post('plans/:id/copy')
+  copy(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.planner.copyPlan(this.uid(req), id);
+  }
+
   @Delete('plans/:id')
   remove(@Req() req: RequestWithUser, @Param('id') id: string) {
     return this.planner.deletePlan(this.uid(req), id);

@@ -1729,6 +1729,37 @@ export class CohortsService {
       .filter((v) => skippedSet.has(v.ytVideoId))
       .map((v) => ({ ytVideoId: v.ytVideoId, title: v.title }));
 
+    // Catch-up (synced cohorts): plan videos BEFORE the group's current point
+    // that THIS member hasn't watched themselves, e.g. they joined late.
+    // The synced player shows the group's ticks, so without this a newcomer
+    // had no way to see (or work through) what they missed.
+    let catchUp: {
+      ytVideoId: string;
+      title: string;
+      durationSec: number | null;
+    }[] = [];
+    if (!solo && me) {
+      const mine = new Set(this.getWatchedVideos(me.progress));
+      const state = await this.prisma.roomVideoState.findUnique({
+        where: { roomId },
+        select: { videoId: true },
+      });
+      let point = state?.videoId
+        ? videos.findIndex((v) => v.ytVideoId === state.videoId)
+        : -1;
+      videos.forEach((v, i) => {
+        if (cohortWatched.has(v.ytVideoId) && i + 1 > point) point = i + 1;
+      });
+      catchUp = videos
+        .slice(0, Math.max(0, point))
+        .filter((v) => !mine.has(v.ytVideoId))
+        .map((v) => ({
+          ytVideoId: v.ytVideoId,
+          title: v.title,
+          durationSec: v.durationSec,
+        }));
+    }
+
     // Derived pace/ETA — pure arithmetic on durations, no LLM. "Continue from the
     // shared pointer": remaining unwatched plan duration ÷ the daily budget.
     const DEFAULT_VIDEO_SEC = 12 * 60;
@@ -1772,6 +1803,8 @@ export class CohortsService {
       // as an optional catch-up list, never played on the shared stage.
       skipped,
       skippedCount: skipped.length,
+      // This member's personal catch-up list (synced cohorts only).
+      catchUp,
       // Shared course progress derived from the pointer — drives the pace/ETA bar.
       progress: {
         completedCount,
@@ -2397,19 +2430,27 @@ export class CohortsService {
         return done;
       });
 
+      // Days scheduled before this member JOINED aren't owed: a late joiner
+      // was being shown "10 days behind" (and emailed it) on day one. They
+      // still get credit if they catch those days up.
+      const joinStart = this.dayBounds(m.joinedAt).start;
+      const owed = elapsed.map((s) => s.scheduledAt >= joinStart);
+      const owedCount = owed.filter(Boolean).length;
       const completed = flags.filter(Boolean).length;
       let streak = 0;
-      for (let i = flags.length - 1; i >= 0 && flags[i]; i--) streak++;
+      for (let i = flags.length - 1; i >= 0 && owed[i] && flags[i]; i--)
+        streak++;
 
       const sc = scoreByUser.get(m.userId);
-      const behind = Math.max(0, elapsed.length - completed);
+      const behind = owed.filter((o, i) => o && !flags[i]).length;
       return {
         userId: m.userId,
         name: m.user?.name || 'Member',
         email: m.user?.email || null,
         completed,
         totalDays,
-        elapsed: elapsed.length,
+        elapsed: owedCount,
+        joinedAfterDays: elapsed.length - owedCount,
         progressPct: totalDays ? Math.round((completed / totalDays) * 100) : 0,
         streak,
         behind,

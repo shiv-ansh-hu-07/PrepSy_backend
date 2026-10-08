@@ -166,6 +166,10 @@ model Room {
 
   remindersent Boolean @default(false)
 
+  // Set when the room was created from an AI study plan ("Create a room for
+  // this plan"): the room shows that plan's current week.
+  studyPlanId String?
+
   members  RoomMember[]
   messages Message[]
   pomodoro Pomodoro?

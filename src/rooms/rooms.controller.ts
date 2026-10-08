@@ -47,6 +47,7 @@ export class RoomsController {
     @Body('collaborationStyle') collaborationStyle?: string,
     @Body('youtubeVideoId') youtubeVideoId?: string,
     @Body('youtubePlaylistId') youtubePlaylistId?: string,
+    @Body('studyPlanId') studyPlanId?: string,
   ) {
     return this.roomsService.createRoom(
       name,
@@ -67,6 +68,7 @@ export class RoomsController {
       collaborationStyle,
       youtubeVideoId,
       youtubePlaylistId,
+      studyPlanId,
     );
   }
 

@@ -353,3 +353,70 @@ describe('weekly standings', () => {
     expect(ann.champion.isYou).toBe(true);
   });
 });
+
+describe('late joiners', () => {
+  beforeAll(() =>
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-10T12:00:00+05:30')),
+  );
+  afterAll(() => jest.useRealTimers());
+
+  it('are not "behind" for days before they joined', async () => {
+    const day = (n: number) =>
+      new Date(`2026-10-${String(n).padStart(2, '0')}T15:00:00+05:30`);
+    const sessions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({
+      id: `s${n}`,
+      topic: `Day ${n}`,
+      scheduledAt: day(n),
+      roomId: null,
+      videoIds: [`v${n}`],
+      status: 'SCHEDULED',
+    }));
+    const svc = svcWith({
+      cohort: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'c1',
+          name: 'DSA',
+          roomId: null,
+          playlist: { title: 'P', _count: { videos: 10 } },
+          members: [
+            {
+              userId: 'early',
+              joinedAt: day(1),
+              progress: {
+                watchedVideos: [
+                  'v1',
+                  'v2',
+                  'v3',
+                  'v4',
+                  'v5',
+                  'v6',
+                  'v7',
+                  'v8',
+                  'v9',
+                  'v10',
+                ],
+              },
+              user: { name: 'E', email: 'e@x' },
+            },
+            {
+              userId: 'late',
+              joinedAt: day(9),
+              progress: { watchedVideos: [] },
+              user: { name: 'L', email: 'l@x' },
+            },
+          ],
+        }),
+      },
+      studySession: { findMany: jest.fn().mockResolvedValue(sessions) },
+      roomAttendance: { findMany: jest.fn().mockResolvedValue([]) },
+      quizAttempt: { findMany: jest.fn().mockResolvedValue([]) },
+    });
+    const p: any = await (svc as any).buildCohortProgress('c1');
+    const late = p.rows.find((r: any) => r.userId === 'late');
+    expect(late.elapsed).toBe(1); // only day 9 is owed (day 10 starts at 3 PM, after 'now')
+    expect(late.behind).toBe(1); // day 9 not done; days 1-8 are not held against them
+    expect(late.joinedAfterDays).toBe(8);
+    const early = p.rows.find((r: any) => r.userId === 'early');
+    expect(early.behind).toBe(0);
+  });
+});

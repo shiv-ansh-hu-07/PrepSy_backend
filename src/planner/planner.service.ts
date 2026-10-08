@@ -185,6 +185,101 @@ export class PlannerService {
     return updated;
   }
 
+  // The plan a room follows (rooms created via "Create a room for this
+  // plan"). Anyone in the room sees it; only the owner ticks topics.
+  async getRoomPlan(userId: string, roomId: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      select: { studyPlanId: true },
+    });
+    if (!room?.studyPlanId) return null;
+    const plan = await this.prisma.studyPlan.findUnique({
+      where: { id: room.studyPlanId },
+      select: {
+        id: true,
+        userId: true,
+        title: true,
+        plan: true,
+        progress: true,
+      },
+    });
+    if (!plan) return null;
+    return {
+      id: plan.id,
+      title: plan.title,
+      plan: plan.plan,
+      progress: plan.progress,
+      isOwner: plan.userId === userId,
+    };
+  }
+
+  // Copy a plan into my planner, re-dated to start today. Allowed for my own
+  // plans and for any plan a room follows (that's how room members get it).
+  async copyPlan(userId: string, id: string) {
+    const src = await this.prisma.studyPlan.findUnique({ where: { id } });
+    if (!src) throw new NotFoundException('Plan not found');
+    if (src.userId !== userId) {
+      const shared = await this.prisma.room.findFirst({
+        where: { studyPlanId: id },
+        select: { id: true },
+      });
+      if (!shared) throw new NotFoundException('Plan not found');
+    }
+    const count = await this.prisma.studyPlan.count({ where: { userId } });
+    if (count >= MAX_PLANS_PER_USER) {
+      throw new BadRequestException(
+        `You can keep up to ${MAX_PLANS_PER_USER} plans. Delete an old one first.`,
+      );
+    }
+    return this.prisma.studyPlan.create({
+      data: {
+        userId,
+        title: src.title,
+        profile: src.profile as Prisma.InputJsonValue,
+        plan: this.redate(src.plan, this.todayIst()) as Prisma.InputJsonValue,
+        chat: [],
+        progress: {},
+      },
+      select: { id: true },
+    });
+  }
+
+  // Shift every date in a plan so it starts on `today` (same length).
+  private redate(plan: unknown, today: string) {
+    const p = (plan && typeof plan === 'object' ? plan : {}) as {
+      meta?: Record<string, unknown>;
+      weeks?: Record<string, unknown>[];
+    };
+    const start =
+      typeof p.meta?.startDate === 'string' ? p.meta.startDate : null;
+    if (!start) return p;
+    const DAY = 86_400_000;
+    const delta = Math.round(
+      (new Date(today + 'T12:00:00Z').getTime() -
+        new Date(start + 'T12:00:00Z').getTime()) /
+        DAY,
+    );
+    const shift = (d: unknown) =>
+      typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)
+        ? new Date(new Date(d + 'T12:00:00Z').getTime() + delta * DAY)
+            .toISOString()
+            .slice(0, 10)
+        : d;
+    return {
+      ...p,
+      meta: {
+        ...p.meta,
+        startDate: shift(p.meta?.startDate),
+        deadline: shift(p.meta?.deadline),
+      },
+      weeks: (p.weeks || []).map((w) => ({
+        ...w,
+        startDate: shift(w.startDate),
+        endDate: shift(w.endDate),
+      })),
+    };
+  }
+
   async deletePlan(userId: string, id: string) {
     await this.own(userId, id);
     await this.prisma.studyPlan.delete({ where: { id } });
