@@ -32,6 +32,9 @@ describe('RoomsService', () => {
       update: jest.Mock;
       deleteMany: jest.Mock;
     };
+    event: {
+      create: jest.Mock;
+    };
     $transaction: jest.Mock;
   };
 
@@ -62,6 +65,9 @@ describe('RoomsService', () => {
         create: jest.fn(),
         update: jest.fn(),
         deleteMany: jest.fn(),
+      },
+      event: {
+        create: jest.fn(),
       },
       $transaction: jest.fn(),
     };
@@ -173,6 +179,8 @@ describe('RoomsService', () => {
     });
     prisma.roomAttendance.update.mockResolvedValue({});
     prisma.roomAttendance.findMany
+      // peers whose attendance overlapped this session
+      .mockResolvedValueOnce([{ userId: 'user-2' }])
       .mockResolvedValueOnce([
         {
           joinedAt: new Date('2026-04-10T09:00:00.000Z'),
@@ -207,6 +215,18 @@ describe('RoomsService', () => {
     expect(prisma.roomAttendance.update).toHaveBeenCalledWith({
       where: { id: 'attendance-1' },
       data: { leftAt: new Date('2026-04-10T10:00:00.000Z') },
+    });
+    expect(prisma.event.create).toHaveBeenCalledWith({
+      data: {
+        name: 'session_completed',
+        userId: 'user-1',
+        props: {
+          roomId: 'focus-room',
+          durationMinutes: 60,
+          peers: 1,
+          withOthers: true,
+        },
+      },
     });
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'user-1' },

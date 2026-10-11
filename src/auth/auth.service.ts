@@ -267,12 +267,17 @@ export class AuthService {
 
     const user = await this.createLocalUser(email, hashed, name);
 
+    // Sign the new user straight in — no second trip through the login form.
     return {
       message: 'User registered successfully',
+      token: this.signJwt(user),
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        attendanceStreak: 0,
+        avatarUrl: null,
+        hasSeenTour: false,
       },
     };
   }

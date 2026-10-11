@@ -77,6 +77,13 @@ export class ProfilesController {
     );
   }
 
+  // First-run intent answers (goals / study times / style). Unlike PUT /me this
+  // needs no other profile fields, so it works right after signup.
+  @Put('me/onboarding')
+  saveOnboarding(@Req() req: RequestWithUser, @Body() body: unknown) {
+    return this.profilesService.saveOnboarding(this.getUserId(req), body);
+  }
+
   // Mark the first-login product tour as seen (account-scoped).
   @Put('me/tour-seen')
   setTourSeen(@Req() req: RequestWithUser) {

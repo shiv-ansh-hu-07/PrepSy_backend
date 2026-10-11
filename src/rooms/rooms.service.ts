@@ -20,6 +20,8 @@ const YT_API = 'https://www.googleapis.com/youtube/v3';
 export class RoomsService {
   private readonly logger = new Logger(RoomsService.name);
   private readonly attendanceTimeZone = 'Asia/Kolkata';
+  // Shorter visits are bounces, not study sessions — they don't count.
+  private static readonly MIN_SESSION_MINUTES = 5;
   private readonly timeZoneAliases: Record<string, string> = {
     'Asia/Calcutta': 'Asia/Kolkata',
   };
@@ -1059,6 +1061,75 @@ export class RoomsService {
     return { success: true };
   }
 
+  // Membership only — members get the 15-minute reminder email. No attendance
+  // row, so it never counts as study time or toward a streak.
+  async notifyMe(roomId: string, userId: string) {
+    const room = await this.prisma.room.findUnique({
+      where: { roomId },
+      select: { roomId: true, femaleOnly: true },
+    });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+    if (room.femaleOnly && !(await this.isFemaleUser(userId))) {
+      throw new ForbiddenException('This room is for women only.');
+    }
+
+    const exists = await this.prisma.roomMember.findFirst({
+      where: { roomId, userId },
+      select: { id: true },
+    });
+    if (!exists) {
+      await this.prisma.roomMember.create({ data: { roomId, userId } });
+    }
+    return { success: true, subscribed: true };
+  }
+
+  // Core-loop analytics, recorded server-side when a session actually closes so
+  // it covers every room type and tab-close exits (not just camera-monitored
+  // sessions). `withOthers` is the activation signal: someone else's attendance
+  // in this room overlapped this session. Best-effort — never fails the leave.
+  private async recordSessionCompleted(
+    attendance: { roomId: string; userId: string; joinedAt: Date },
+    leftAt: Date,
+  ) {
+    const durationMinutes = Math.round(
+      (leftAt.getTime() - attendance.joinedAt.getTime()) / 60000,
+    );
+    if (durationMinutes < RoomsService.MIN_SESSION_MINUTES) return;
+
+    try {
+      const peers = await this.prisma.roomAttendance.findMany({
+        where: {
+          roomId: attendance.roomId,
+          userId: { not: attendance.userId },
+          joinedAt: { lt: leftAt },
+          OR: [{ leftAt: null }, { leftAt: { gt: attendance.joinedAt } }],
+        },
+        distinct: ['userId'],
+        select: { userId: true },
+      });
+      await this.prisma.event.create({
+        data: {
+          name: 'session_completed',
+          userId: attendance.userId,
+          props: {
+            roomId: attendance.roomId,
+            durationMinutes,
+            peers: peers.length,
+            withOthers: peers.length > 0,
+          },
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `session_completed not recorded: ${
+          error instanceof Error ? error.message : error
+        }`,
+      );
+    }
+  }
+
   async leaveRoom(roomId: string, userId: string) {
     const room = await this.prisma.room.findUnique({
       where: { roomId },
@@ -1093,6 +1164,10 @@ export class RoomsService {
         where: { id: currentAttendance.id },
         data: { leftAt: now },
       });
+      await this.recordSessionCompleted(
+        { roomId, userId, joinedAt: currentAttendance.joinedAt },
+        now,
+      );
     }
 
     const [allUserAttendance, companionAttendance, user] = await Promise.all([

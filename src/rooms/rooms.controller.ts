@@ -113,6 +113,13 @@ export class RoomsController {
     return this.roomsService.joinRoom(roomId, this.getUserId(req));
   }
 
+  // "Notify me" on a scheduled room: subscribe to its reminder emails without
+  // recording a study session (unlike /join, which also opens attendance).
+  @Post(':roomId/notify')
+  notifyMe(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
+    return this.roomsService.notifyMe(roomId, this.getUserId(req));
+  }
+
   @Post(':roomId/leave')
   leaveRoom(@Param('roomId') roomId: string, @Req() req: RequestWithUser) {
     return this.roomsService.leaveRoom(roomId, this.getUserId(req));

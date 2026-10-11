@@ -76,10 +76,14 @@ describe('AuthService', () => {
     expect(prisma.user.create).toHaveBeenCalled();
     expect(result).toEqual({
       message: 'User registered successfully',
+      token: expect.any(String),
       user: {
         id: 'user-1',
         email: 'test@prepsy.in',
         name: 'Test User',
+        attendanceStreak: 0,
+        avatarUrl: null,
+        hasSeenTour: false,
       },
     });
   });

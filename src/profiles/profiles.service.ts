@@ -152,6 +152,67 @@ export class ProfilesService {
 
   // Mark the first-login product tour as seen. Account-scoped so it follows the
   // user across devices; its own path so it skips full-profile validation.
+  // Saves the 3-tap signup intent screen and marks onboarding done. Only the
+  // fields the user actually answered are written, so a skip changes nothing
+  // but the flag.
+  async saveOnboarding(userId: string, body: unknown) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const input = (body && typeof body === 'object' ? body : {}) as Record<
+      string,
+      unknown
+    >;
+    const list = (value: unknown) =>
+      Array.isArray(value)
+        ? Array.from(
+            new Set(
+              value
+                .filter((v): v is string => typeof v === 'string')
+                .map((v) => v.trim().slice(0, 60))
+                .filter(Boolean),
+            ),
+          ).slice(0, 10)
+        : [];
+    const goals = list(input.goals);
+    const availability = list(input.availability);
+    const collaborationPreference =
+      typeof input.collaborationPreference === 'string'
+        ? input.collaborationPreference.trim().slice(0, 40)
+        : '';
+
+    const data = {
+      hasSeenTour: true,
+      ...(goals.length ? { goals } : {}),
+      ...(availability.length ? { availability } : {}),
+      ...(collaborationPreference ? { collaborationPreference } : {}),
+    };
+
+    try {
+      await this.prisma.userProfile.upsert({
+        where: { userId },
+        create: { userId, ...data },
+        update: data,
+      });
+    } catch (error) {
+      if (this.isProfileStorageUnavailable(error)) {
+        throw new BadRequestException(
+          'Profile storage is still being prepared. Please run the latest database migration and try again.',
+        );
+      }
+      throw new BadRequestException(
+        'Could not save your answers. Please try again.',
+      );
+    }
+
+    return { hasSeenTour: true };
+  }
+
   async setTourSeen(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
