@@ -24,6 +24,7 @@ describe('StatsService', () => {
     roomAttendance: { findMany: jest.Mock };
     roomMember: { findMany: jest.Mock };
     user: { findUnique: jest.Mock };
+    userProfile: { findUnique: jest.Mock };
   };
   let presenceService: {
     getActiveUserIds: jest.Mock;
@@ -45,6 +46,7 @@ describe('StatsService', () => {
       roomAttendance: { findMany: jest.fn() },
       roomMember: { findMany: jest.fn() },
       user: { findUnique: jest.fn() },
+      userProfile: { findUnique: jest.fn() },
     };
     presenceService = {
       getActiveUserIds: jest.fn().mockReturnValue(new Set()),
@@ -135,42 +137,36 @@ describe('StatsService', () => {
       name: 'Ariun',
       email: 'ariun@example.com',
     });
+    prisma.userProfile.findUnique.mockResolvedValue({
+      dailyStudyGoalMinutes: 120,
+    });
     prisma.roomAttendance.findMany.mockResolvedValue([
       {
         id: 'attendance-1',
         roomId: 'algebra-room',
         joinedAt: new Date('2026-04-08T04:00:00.000Z'),
         leftAt: new Date('2026-04-08T05:30:00.000Z'),
-        room: {
-          roomId: 'algebra-room',
-          name: 'Algebra Focus',
-          tags: ['math', 'dsa'],
-          durationMinutes: 30,
-        },
+        roomName: 'Algebra Focus',
+        roomTags: ['math', 'dsa'],
+        roomDurationMinutes: 30,
       },
       {
         id: 'attendance-2',
         roomId: 'web-room',
         joinedAt: new Date('2026-04-09T04:00:00.000Z'),
         leftAt: new Date('2026-04-09T05:00:00.000Z'),
-        room: {
-          roomId: 'web-room',
-          name: 'React Prep',
-          tags: ['react'],
-          durationMinutes: 40,
-        },
+        roomName: 'React Prep',
+        roomTags: ['react'],
+        roomDurationMinutes: 40,
       },
       {
         id: 'attendance-3',
         roomId: 'web-room',
         joinedAt: new Date('2026-04-10T04:00:00.000Z'),
         leftAt: null,
-        room: {
-          roomId: 'web-room',
-          name: 'React Prep',
-          tags: ['react'],
-          durationMinutes: 120,
-        },
+        roomName: 'React Prep',
+        roomTags: ['react'],
+        roomDurationMinutes: 120,
       },
     ]);
     prisma.roomMember.findMany.mockResolvedValue([
@@ -210,6 +206,7 @@ describe('StatsService', () => {
       bestStreakDays: 2,
       studiedDaysThisWeek: 2,
       consistencyScore: 29,
+      dailyStudyGoalMinutes: 120,
     });
     expect(result.analytics.weeklyFocus).toEqual([
       { date: '2026-04-06', minutes: 0 },

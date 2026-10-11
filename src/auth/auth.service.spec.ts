@@ -56,7 +56,7 @@ describe('AuthService', () => {
   });
 
   it('registers a local user without touching streak state', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.user.findFirst.mockResolvedValue(null);
     prisma.user.create.mockResolvedValue({
       id: 'user-1',
       email: 'test@prepsy.in',
@@ -69,11 +69,13 @@ describe('AuthService', () => {
       'Test User',
     );
 
-    expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { email: 'test@prepsy.in' },
-      include: { profile: { select: { avatarUrl: true } } },
+    // Existing-account lookup is case-insensitive and joins the profile.
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { email: { equals: 'test@prepsy.in', mode: 'insensitive' } },
+      include: { profile: { select: { avatarUrl: true, hasSeenTour: true } } },
     });
     expect(prisma.user.create).toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
     expect(result).toEqual({
       message: 'User registered successfully',
       token: expect.any(String),
@@ -131,6 +133,7 @@ describe('AuthService', () => {
         name: 'Google User',
         attendanceStreak: 0,
         avatarUrl: null,
+        hasSeenTour: false,
       },
     });
   });

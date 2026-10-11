@@ -25,6 +25,9 @@ describe('RoomsService', () => {
     pomodoro: {
       deleteMany: jest.Mock;
     };
+    cohort: {
+      deleteMany: jest.Mock;
+    };
     roomAttendance: {
       findFirst: jest.Mock;
       findMany: jest.Mock;
@@ -57,6 +60,9 @@ describe('RoomsService', () => {
         deleteMany: jest.fn(),
       },
       pomodoro: {
+        deleteMany: jest.fn(),
+      },
+      cohort: {
         deleteMany: jest.fn(),
       },
       roomAttendance: {
@@ -93,7 +99,7 @@ describe('RoomsService', () => {
     expect(service).toBeDefined();
   });
 
-  it('deletes room attendance before deleting an owned room', async () => {
+  it('deletes an owned room and its cohort but keeps attendance history', async () => {
     prisma.room.findUnique.mockResolvedValue({
       roomId: 'focus-room',
       ownerId: 'user-1',
@@ -101,7 +107,7 @@ describe('RoomsService', () => {
     prisma.roomMember.deleteMany.mockReturnValue('delete members');
     prisma.message.deleteMany.mockReturnValue('delete messages');
     prisma.pomodoro.deleteMany.mockReturnValue('delete pomodoro');
-    prisma.roomAttendance.deleteMany.mockReturnValue('delete attendance');
+    prisma.cohort.deleteMany.mockReturnValue('delete cohort');
     prisma.room.delete.mockReturnValue('delete room');
     prisma.$transaction.mockResolvedValue([]);
 
@@ -109,14 +115,16 @@ describe('RoomsService', () => {
       success: true,
     });
 
-    expect(prisma.roomAttendance.deleteMany).toHaveBeenCalledWith({
+    expect(prisma.cohort.deleteMany).toHaveBeenCalledWith({
       where: { roomId: 'focus-room' },
     });
+    // Attendance rows hold analytics that must survive room deletion.
+    expect(prisma.roomAttendance.deleteMany).not.toHaveBeenCalled();
     expect(prisma.$transaction).toHaveBeenCalledWith([
       'delete members',
       'delete messages',
       'delete pomodoro',
-      'delete attendance',
+      'delete cohort',
       'delete room',
     ]);
   });
@@ -127,6 +135,8 @@ describe('RoomsService', () => {
     prisma.room.findUnique.mockResolvedValue({
       roomId: 'focus-room',
       name: 'Focus Room',
+      tags: ['dsa'],
+      durationMinutes: 50,
     });
     prisma.roomMember.findFirst.mockResolvedValue({
       roomId: 'focus-room',
@@ -157,6 +167,9 @@ describe('RoomsService', () => {
       data: {
         roomId: 'focus-room',
         userId: 'user-1',
+        roomName: 'Focus Room',
+        roomTags: ['dsa'],
+        roomDurationMinutes: 50,
       },
     });
 

@@ -1,8 +1,16 @@
 import { BadRequestException } from '@nestjs/common';
 import { ProfilesService } from './profiles.service';
 
+// uuid ships ESM-only; it is pulled in transitively (friends -> s3) and never
+// used by these tests.
+jest.mock('uuid', () => ({ v4: () => 'test-uuid' }));
+
 describe('ProfilesService', () => {
   let service: ProfilesService;
+  let friends: {
+    statusMap: jest.Mock;
+    statusWith: jest.Mock;
+  };
   let prisma: {
     user: {
       findUnique: jest.Mock;
@@ -27,7 +35,11 @@ describe('ProfilesService', () => {
       },
       $transaction: jest.fn(),
     };
-    service = new ProfilesService(prisma as any);
+    friends = {
+      statusMap: jest.fn(),
+      statusWith: jest.fn(),
+    };
+    service = new ProfilesService(prisma as any, friends as any);
   });
 
   it('returns missing required fields for an incomplete profile', async () => {
@@ -104,7 +116,10 @@ describe('ProfilesService', () => {
     });
     prisma.user.update.mockResolvedValue({ id: 'user-1' });
     prisma.userProfile.upsert.mockResolvedValue({});
-    prisma.$transaction.mockResolvedValue([{ id: 'user-1' }, {}]);
+    // The service uses an interactive transaction; run it against the mock.
+    prisma.$transaction.mockImplementation(
+      (run: (tx: typeof prisma) => unknown) => run(prisma),
+    );
 
     const result = await service.updateMyProfile('user-1', {
       fullName: 'Shivanshu Tiwari',
@@ -121,6 +136,10 @@ describe('ProfilesService', () => {
       availability: ['weekends'],
     });
 
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { name: 'Shivanshu Tiwari' },
+    });
     expect(prisma.userProfile.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: 'user-1' },
